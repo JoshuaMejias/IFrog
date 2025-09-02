@@ -16,6 +16,7 @@ import androidx.navigation.NavController
 
 @Composable
 fun FrogDetailScreen(frog: Frogs, navController: NavController) {
+
     Box(
         modifier = Modifier
             .fillMaxSize()
