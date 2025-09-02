@@ -35,6 +35,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 ) { innerPadding ->
+
                     NavHost(
                         navController = navController,
                         startDestination = "splash",
