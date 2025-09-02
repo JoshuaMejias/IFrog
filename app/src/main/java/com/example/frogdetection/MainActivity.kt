@@ -42,7 +42,6 @@ class MainActivity : ComponentActivity() {
                     ) {
                         composable("splash") {
                             SplashScreen(navController)
-
                         }
                         composable("welcome") {
                             WelcomeScreen(navController)
