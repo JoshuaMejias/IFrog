@@ -116,10 +116,11 @@ fun FrogDictionaryScreen(navController: NavController, frogs: List<Frogs>) {
                                 painter = painterResource(id = frog.imageResId),
                                 contentDescription = frog.name,
                                 modifier = Modifier
-                                    .size(70.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White)
-                                    .padding(6.dp)
+                                    .width(120.dp)   // wider
+                                    .height(80.dp)   // shorter height (rectangle shape)
+                                    .clip(RoundedCornerShape(12.dp)) // rectangular with rounded corners
+                                    .background(Color.White, RoundedCornerShape(12.dp))
+                                    .padding(5.dp)
                             )
 
                             Spacer(modifier = Modifier.width(12.dp))

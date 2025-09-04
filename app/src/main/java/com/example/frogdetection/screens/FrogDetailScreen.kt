@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -68,12 +69,15 @@ fun FrogDetailScreen(navController: NavController, frogs: List<Frogs>, startInde
                         Image(
                             painter = painterResource(id = frog.imageResId),
                             contentDescription = frog.name,
+                            contentScale = ContentScale.Crop, // fills and crops a little for uniform look
                             modifier = Modifier
-                                .size(160.dp)
-                                .clip(CircleShape)
-                                .background(Color.White)
-                                .padding(12.dp)
+                                .width(250.dp)   // wider
+                                .height(200.dp)  // taller
+                                .clip(RoundedCornerShape(16.dp)) // slightly larger curve
+                                .background(Color.White, RoundedCornerShape(16.dp))
+                                .padding(6.dp) // small inner padding
                         )
+
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
