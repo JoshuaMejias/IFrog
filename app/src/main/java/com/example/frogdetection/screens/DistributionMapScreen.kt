@@ -1,197 +1,80 @@
 package com.example.frogdetection.screens
 
-import android.Manifest
-import android.content.Context
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.widget.Toast
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
-import com.example.frogdetection.R
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.rememberPermissionState
-import org.osmdroid.config.Configuration
+import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Marker
-import com.opencsv.CSVReader
-import android.util.Log
-import com.google.accompanist.permissions.isGranted
-import java.io.InputStreamReader
+import org.osmdroid.views.overlay.Overlay
+import java.text.SimpleDateFormat
+import java.util.*
 
-data class FrogSpecies(
-    val name: String,
-    val locations: List<GeoPoint>
-)
-
-fun loadFrogLocations(context: Context, speciesName: String): List<GeoPoint> {
-    val locations = mutableListOf<GeoPoint>()
-    try {
-        val inputStream = context.assets.open("frog_data.csv")
-        CSVReader(InputStreamReader(inputStream)).use { reader ->
-            reader.readAll().drop(1).forEach { row -> // Skip header
-                if (row[0] == speciesName) {
-                    locations.add(GeoPoint(row[1].toDouble(), row[2].toDouble()))
-                }
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("DistributionMapScreen", "Error loading CSV: $e")
-        // Fallback to sample data
-        val sampleData = mapOf(
-            "Kaloula pulchra" to listOf(
-                GeoPoint(9.85, 124.14), // Clarin, Bohol, Philippines
-                GeoPoint(13.75, 100.50), // Thailand
-                GeoPoint(1.35, 103.82)   // Singapore
-            ),
-            "Rhinella marina" to listOf(
-                GeoPoint(-16.92, 145.77), // Queensland, Australia
-                GeoPoint(-12.46, 130.84), // Darwin, Australia
-                GeoPoint(21.30, -157.86)  // Hawaii
-            )
-        )
-        locations.addAll(sampleData[speciesName] ?: emptyList())
-    }
-    return locations
-}
-
-@OptIn(ExperimentalPermissionsApi::class)
 @Composable
-fun DistributionMapScreen(navController: NavController, speciesName: String?) {
+fun DistributionMapScreen(
+    navController: NavController,
+    viewModel: CapturedHistoryViewModel,
+    focusedFrogId: String? = null
+) {
+    val frogs = viewModel.capturedFrogs.collectAsState(initial = emptyList()).value
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Initialize osmdroid configuration
-    Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+    // Default center: Bohol
+    var mapCenter = GeoPoint(9.85, 124.14)
 
-    // Load species locations
-    val selectedSpecies = FrogSpecies(
-        name = speciesName ?: "Kaloula pulchra",
-        locations = loadFrogLocations(context, speciesName ?: "Kaloula pulchra")
-    )
-
-    // Permission handling
-    val locationPermissionState = rememberPermissionState(Manifest.permission.ACCESS_FINE_LOCATION)
-    val storagePermissionState = rememberPermissionState(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-    var showPermissionDialog by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(Unit) {
-        if (!locationPermissionState.status.isGranted) {
-            locationPermissionState.launchPermissionRequest()
-        }
-        if (!storagePermissionState.status.isGranted) {
-            storagePermissionState.launchPermissionRequest()
+    // Center on selected frog if available
+    focusedFrogId?.toIntOrNull()?.let { id ->
+        frogs.find { it.id == id }?.let { frog ->
+            mapCenter = GeoPoint(frog.latitude, frog.longitude)
         }
     }
 
-    showPermissionDialog?.let { permission ->
-        AlertDialog(
-            onDismissRequest = { showPermissionDialog = null },
-            title = { Text("$permission Permission Needed") },
-            text = { Text("This app needs $permission access to display map data.") },
-            confirmButton = {
-                Button(onClick = {
-                    showPermissionDialog = null
-                    if (permission == "Location") {
-                        locationPermissionState.launchPermissionRequest()
-                    } else {
-                        storagePermissionState.launchPermissionRequest()
-                    }
-                }) {
-                    Text("Grant Permission")
-                }
-            },
-            dismissButton = {
-                Button(onClick = { showPermissionDialog = null }) {
-                    Text("Deny")
-                }
-            }
-        )
-    }
+    AndroidView(
+        factory = { ctx ->
+            MapView(ctx).apply {
+                setTileSource(TileSourceFactory.MAPNIK)
+                controller.setZoom(11.0)
+                controller.setCenter(mapCenter)
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(Color(0xFFE0FFE0), Color(0xFFB0FFB0))
-                )
-            )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                painter = painterResource(id = R.drawable.ifrog_logo),
-                contentDescription = "iFrog Logo",
-                modifier = Modifier
-                    .size(120.dp)
-                    .padding(bottom = 16.dp),
-                tint = Color.Unspecified
-            )
-            Text(
-                text = "${selectedSpecies.name} Distribution",
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    fontWeight = FontWeight.Bold
-                ),
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(16.dp))
+                val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
 
-            AndroidView(
-                factory = { ctx ->
-                    MapView(ctx).apply {
-                        setTileSource(TileSourceFactory.MAPNIK)
-                        setBuiltInZoomControls(true)
-                        setMultiTouchControls(true)
-                        controller.setZoom(10.0) // Closer zoom for Bohol
-                        controller.setCenter(selectedSpecies.locations.firstOrNull() ?: GeoPoint(9.85, 124.14)) // Clarin, Bohol
-                        selectedSpecies.locations.forEach { location ->
-                            val marker = Marker(this)
-                            marker.position = location
-                            marker.title = selectedSpecies.name
-                            marker.snippet = if (selectedSpecies.name == "Kaloula pulchra") "Safe to eat" else "Toxic"
-                            overlays.add(marker)
+                // Add red dots for frogs
+                frogs.forEach { frog ->
+                    val point = GeoPoint(frog.latitude, frog.longitude)
+                    val overlay = object : Overlay() {
+                        override fun draw(c: Canvas, osmv: MapView, shadow: Boolean) {
+                            val pt = osmv.projection.toPixels(point, null)
+                            val paint = Paint().apply {
+                                color = android.graphics.Color.RED
+                                style = Paint.Style.FILL
+                            }
+                            c.drawCircle(pt.x.toFloat(), pt.y.toFloat(), 8f, paint)
+                        }
+
+                        override fun onSingleTapConfirmed(e: android.view.MotionEvent?, mapView: MapView?): Boolean {
+                            val projection = mapView?.projection ?: return false
+                            val pt = projection.toPixels(point, null)
+                            val dx = (e?.x ?: return false) - pt.x.toFloat()
+                            val dy = (e?.y ?: return false) - pt.y.toFloat()
+
+                            // Detect tap near the dot (within 30px)
+                            if (dx * dx + dy * dy < 30 * 30) {
+                                val msg = "${frog.speciesName}\nCaptured: ${formatter.format(Date(frog.timestamp))}"
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                return true
+                            }
+                            return false
                         }
                     }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(400.dp),
-                update = { mapView -> mapView.invalidate() }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = { navController.popBackStack() },
-                modifier = Modifier
-                    .fillMaxWidth(0.9f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF90EE90))
-            ) {
-                Text("Back")
+                    overlays.add(overlay)
+                }
             }
         }
-    }
-
-    DisposableEffect(lifecycleOwner) {
-        onDispose {
-            Configuration.getInstance().save(context, context.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-        }
-    }
+    )
 }

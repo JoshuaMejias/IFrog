@@ -1,14 +1,12 @@
 package com.example.frogdetection.screens
 
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.currentBackStackEntryAsState
 
@@ -18,38 +16,73 @@ fun BottomNavBar(navController: NavController) {
     val currentRoute = navBackStackEntry?.destination?.route
 
     NavigationBar(
-        containerColor = Color(0xFFB0FFB0),
-        contentColor = MaterialTheme.colorScheme.onPrimary
+        containerColor = Color(0xFF90EE90), // slightly darker green
+        contentColor = Color(0xFF006400)
     ) {
         NavigationBarItem(
-            icon = { Icon(painterResource(android.R.drawable.ic_menu_help), "Dictionary") },
-            label = { Text("Dictionary") },
-            selected = currentRoute == "dictionary",
-            onClick = { navController.navigate("dictionary") }
+            icon = { Icon(Icons.Filled.MenuBook, contentDescription = "Dictionary") },
+            label = { Text("Dictionary", fontSize = 11.sp) },
+            selected = currentRoute?.startsWith("dictionary") == true,
+            onClick = {
+                navController.navigate("dictionary") {
+                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
         )
+
         NavigationBarItem(
-            icon = { Icon(painterResource(android.R.drawable.ic_menu_mapmode), "Map") },
-            label = { Text("Map") },
-            selected = currentRoute == "map",
-            onClick = { navController.navigate("map") }
+            icon = { Icon(Icons.Filled.Map, contentDescription = "Map") },
+            label = { Text("Map", fontSize = 11.sp) },
+            selected = currentRoute?.startsWith("map") == true,
+            onClick = {
+                // Provide default species to avoid navigation crash
+                navController.navigate("map/Kaloula pulchra") {
+                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
         )
+
         NavigationBarItem(
-            icon = { Icon(painterResource(android.R.drawable.ic_menu_myplaces), "Home") },
-            label = { Text("Home") },
+            icon = { Icon(Icons.Filled.Home, contentDescription = "Home") },
+            label = { Text("Home", fontSize = 11.sp) },
             selected = currentRoute == "home",
-            onClick = { navController.navigate("home") }
+            onClick = {
+                navController.navigate("home") {
+                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
         )
+
         NavigationBarItem(
-            icon = { Icon(painterResource(android.R.drawable.ic_menu_recent_history), "History") },
-            label = { Text("History") },
+            icon = { Icon(Icons.Filled.History, contentDescription = "History") },
+            label = { Text("History", fontSize = 11.sp) },
             selected = currentRoute == "history",
-            onClick = { navController.navigate("history") }
+            onClick = {
+                navController.navigate("history") {
+                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
         )
+
         NavigationBarItem(
-            icon = { Icon(painterResource(android.R.drawable.ic_menu_info_details), "About") },
-            label = { Text("About") },
+            icon = { Icon(Icons.Filled.Info, contentDescription = "About") },
+            label = { Text("About", fontSize = 11.sp) },
             selected = currentRoute == "about",
-            onClick = { navController.navigate("about") }
+            onClick = {
+                navController.navigate("about") {
+                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
         )
     }
 }

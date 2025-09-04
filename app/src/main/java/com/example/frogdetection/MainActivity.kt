@@ -4,23 +4,19 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.navigation.NavController
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.compose.*
 import com.example.frogdetection.screens.*
+import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-
         super.onCreate(savedInstanceState)
         setContent {
             iFrogTheme {
@@ -41,40 +37,47 @@ class MainActivity : ComponentActivity() {
                         startDestination = "splash",
                         modifier = Modifier.padding(innerPadding)
                     ) {
-                        composable("splash") {
-                            SplashScreen(navController)
+                        composable("splash") { SplashScreen(navController) }
+                        composable("welcome") { WelcomeScreen(navController) }
+                        composable("home") { HomeScreen(navController) }
+                        composable("dictionary") { FrogDictionaryScreen(navController, frogs = frogList) }
 
-                        }
-                        composable("welcome") {
-                            WelcomeScreen(navController)
-                        }
-                        composable("home") {
-                            HomeScreen(navController)
-                        }
-                        composable("dictionary") {
-                            FrogDictionaryScreen(navController)
-                        }
-                        // ✅ NEW frog detail route
                         composable("frogDetail/{frogName}") { backStackEntry ->
                             val frogName = backStackEntry.arguments?.getString("frogName")
-                            // Frog data will be fetched/handled inside FrogDetailScreen
-                            FrogDetailScreen(frogName ?: "", navController)
+                            val startIndex = frogList.indexOfFirst { it.name == frogName }
+                            if (startIndex != -1) {
+                                FrogDetailScreen(navController, frogs = frogList, startIndex = startIndex)
+                            }
                         }
 
-                        composable("map/{speciesName}") { backStackEntry ->
-                            val speciesName = backStackEntry.arguments?.getString("speciesName")
-                                ?: "Kaloula pulchra" // Fallback
-                            DistributionMapScreen(navController, speciesName)
-                        }
                         composable("history") {
-                            CapturedHistoryScreen(navController)
+                            // ✅ No factory needed
+                            val historyViewModel: CapturedHistoryViewModel = viewModel()
+
+                            CapturedHistoryScreen(
+                                navController = navController,
+                                viewModel = historyViewModel
+                            )
                         }
-                        composable("about") {
-                            AboutScreen(navController)
+
+
+                        composable("map/{frogId}?") { backStackEntry ->
+                            val historyViewModel: CapturedHistoryViewModel = viewModel(
+                                factory = ViewModelProvider.AndroidViewModelFactory(application)
+                            )
+
+                            val frogId = backStackEntry.arguments?.getString("frogId")
+
+                            DistributionMapScreen(
+                                navController = navController,
+                                viewModel = historyViewModel,
+                                focusedFrogId = frogId
+                            )
                         }
-                        composable("preview") {
-                            ImagePreviewScreen(navController)
-                        }
+
+
+                        composable("about") { AboutScreen(navController) }
+                        composable("preview") { ImagePreviewScreen(navController) }
                     }
                 }
             }
