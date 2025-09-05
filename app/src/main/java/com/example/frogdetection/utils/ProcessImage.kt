@@ -2,21 +2,39 @@ package com.example.frogdetection.utils
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import android.util.Log
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 fun processImage(bitmap: Bitmap, context: Context, navController: NavController) {
     CoroutineScope(Dispatchers.IO).launch {
         try {
-            Log.d("ProcessImage", "Processing bitmap of size: ${bitmap.width}x${bitmap.height}")
-            // Add your image processing logic here (e.g., ML model inference)
+            // Save bitmap to cache directory
+            val file = File(context.cacheDir, "frog_preview.png")
+            val outputStream = FileOutputStream(file)
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+            outputStream.flush()
+            outputStream.close()
+
+            // Convert file to content:// URI using FileProvider
+            val uri: Uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.provider", // authority from Manifest
+                file
+            )
+
+            Log.d("ProcessImage", "Image saved at: $uri")
+
             withContext(Dispatchers.Main) {
-                navController.navigate("resultScreen") // Ensure this route exists
+                navController.navigate("imagePreviewScreen/${Uri.encode(uri.toString())}")
             }
         } catch (e: Exception) {
             Log.e("ProcessImage", "Error processing image: $e")

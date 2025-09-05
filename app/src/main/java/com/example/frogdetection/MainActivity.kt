@@ -77,7 +77,10 @@ class MainActivity : ComponentActivity() {
 
 
                         composable("about") { AboutScreen(navController) }
-                        composable("preview") { ImagePreviewScreen(navController) }
+                        composable("imagePreviewScreen/{imageUri}") { backStackEntry ->
+                            val imageUri = backStackEntry.arguments?.getString("imageUri")
+                            ImagePreviewScreen(navController, imageUri)
+                        }
                     }
                 }
             }
