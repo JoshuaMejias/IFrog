@@ -33,7 +33,7 @@ fun CapturedHistoryScreen(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        // Header
+        // ✅ Header
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
@@ -131,13 +131,13 @@ fun CapturedFrogItem(
                 Column {
                     Text(frog.speciesName, style = MaterialTheme.typography.titleMedium)
 
-                    // ✅ Display locationName directly (resolved in ViewModel)
+                    // ✅ Location comes straight from DB
                     val locationText = when {
                         !frog.locationName.isNullOrBlank() -> frog.locationName!!
                         (frog.latitude != null && frog.longitude != null &&
                                 frog.latitude != 0.0 && frog.longitude != 0.0) ->
                             "Lat: %.4f, Lon: %.4f".format(frog.latitude, frog.longitude)
-                        else -> "Locating..."
+                        else -> "Unknown Location"
                     }
                     Text(locationText, style = MaterialTheme.typography.bodyMedium)
 

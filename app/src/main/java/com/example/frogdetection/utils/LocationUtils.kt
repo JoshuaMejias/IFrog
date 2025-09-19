@@ -3,65 +3,63 @@ package com.example.frogdetection.utils
 import android.content.Context
 import android.location.Geocoder
 import android.util.Log
-import com.google.android.gms.maps.model.LatLng
-import com.google.android.libraries.places.api.model.Place
-import com.google.android.libraries.places.api.net.PlacesClient
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.URL
 import java.util.*
 
 suspend fun getReadableLocation(
     context: Context,
     latitude: Double?,
     longitude: Double?,
-    placesClient: PlacesClient? = null
-): String {
+    apiKey: String? = null
+): String = withContext(Dispatchers.IO) {
     if (latitude == null || longitude == null || (latitude == 0.0 && longitude == 0.0)) {
-        return "Unknown Location"
+        return@withContext "Unknown Location"
     }
 
-    // ✅ Try Android Geocoder first (Barangay, Municipality, Province, Country)
+    // 1️⃣ Try Android Geocoder (offline)
     try {
         val geocoder = Geocoder(context, Locale.getDefault())
         val addresses = geocoder.getFromLocation(latitude, longitude, 1)
-
         if (!addresses.isNullOrEmpty()) {
             val addr = addresses[0]
 
-            val building = addr.featureName ?: ""   // Optional landmark/building
-            val barangay = addr.subLocality ?: ""   // Barangay
-            val municipality = addr.locality ?: addr.subAdminArea ?: ""  // City/Municipality
-            val province = addr.adminArea ?: ""     // Province
-            val country = addr.countryName ?: ""    // Country
+            val barangay = addr.subLocality ?: ""
+            val municipality = addr.locality ?: addr.subAdminArea ?: ""
+            val province = addr.adminArea ?: ""
+            val country = addr.countryName ?: ""
 
-            val readable = listOf(building, barangay, municipality, province, country)
+            val formatted = listOf(barangay, municipality, province, country)
                 .filter { it.isNotBlank() }
                 .joinToString(", ")
 
-            if (readable.isNotBlank()) return readable
+            if (barangay.isNotBlank()) {
+                return@withContext formatted  // ✅ Barangay found, good enough
+            }
         }
     } catch (e: Exception) {
-        Log.e("getReadableLocation", "Geocoder failed: ${e.message}")
+        Log.w("getReadableLocation", "Geocoder failed: ${e.message}")
     }
 
-    // ✅ If Geocoder fails → fallback to Places API (using reverse lookup)
-    if (placesClient != null) {
+    // 2️⃣ Fallback: Google Geocoding API (online, needs API key)
+    if (!apiKey.isNullOrBlank()) {
         try {
-            val latLng = LatLng(latitude, longitude)
-            val placeFields = listOf(Place.Field.NAME, Place.Field.ADDRESS)
-
-            // Instead of FetchPlaceRequest, use findCurrentPlace or Geocoding API via HTTP
-            val place = com.google.android.libraries.places.api.model.Place.builder()
-                .setLatLng(latLng)
-                .build()
-
-            // Since Places SDK doesn’t directly support reverse geocoding by latLng,
-            // you should use Geocoder or the Geocoding HTTP API for full accuracy.
-            return place.address ?: "Lat: %.4f, Lon: %.4f".format(latitude, longitude)
+            val url =
+                "https://maps.googleapis.com/maps/api/geocode/json?latlng=$latitude,$longitude&key=$apiKey&language=en"
+            val response = URL(url).readText()
+            val json = JSONObject(response)
+            val results = json.getJSONArray("results")
+            if (results.length() > 0) {
+                val formattedAddress = results.getJSONObject(0).getString("formatted_address")
+                return@withContext formattedAddress
+            }
         } catch (e: Exception) {
-            Log.w("getReadableLocation", "Places API fallback failed: ${e.message}")
+            Log.e("getReadableLocation", "Google Geocoding failed: ${e.message}")
         }
     }
 
-    // ✅ Last resort → raw coordinates
-    return "Lat: %.4f, Lon: %.4f".format(latitude, longitude)
+    // 3️⃣ Fallback: Just lat/lon
+    return@withContext "Lat: %.4f, Lon: %.4f".format(latitude, longitude)
 }

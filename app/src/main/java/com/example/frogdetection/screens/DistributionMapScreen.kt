@@ -1,12 +1,12 @@
 package com.example.frogdetection.screens
 
+import android.graphics.drawable.ColorDrawable
 import android.widget.Toast
 import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
-import com.example.frogdetection.R
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -42,33 +42,35 @@ fun DistributionMapScreen(
                 controller.setCenter(mapCenter)
             }
         },
-        update = { mapView ->  // 🔧 ensures markers update instead of stacking
+        update = { mapView ->
+            // 🔧 Clear overlays before re-drawing
             mapView.overlays.clear()
 
             val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
 
             frogs.forEach { frog ->
-                val point = GeoPoint(frog.latitude ?: 0.0, frog.longitude ?: 0.0)
+                val lat = frog.latitude ?: 0.0
+                val lon = frog.longitude ?: 0.0
+                val point = GeoPoint(lat, lon)
 
                 val locationName = frog.locationName
 
                 val marker = Marker(mapView).apply {
                     position = point
-                    icon = ContextCompat.getDrawable(context, R.drawable.frog_marker)
+                    // ✅ Use red dot instead of frog drawable
+                    icon = ColorDrawable(android.graphics.Color.RED)
                     title = frog.speciesName
                     subDescription = buildString {
                         append(
                             "📍 ${
-                                locationName ?: "Lat: %.4f, Lon: %.4f".format(
-                                    frog.latitude,
-                                    frog.longitude
-                                )
+                                locationName ?: "Lat: %.4f, Lon: %.4f".format(lat, lon)
                             }\n"
                         )
                         append("🕒 ${formatter.format(Date(frog.timestamp))}")
                     }
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
 
+                    // Show details in toast
                     setOnMarkerClickListener { _, _ ->
                         val msg = "$title\n$subDescription"
                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()

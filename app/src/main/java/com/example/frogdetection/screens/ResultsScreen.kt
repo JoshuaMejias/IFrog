@@ -7,14 +7,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import coil.compose.rememberAsyncImagePainter
 import com.example.frogdetection.model.CapturedFrog
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
-import com.example.frogdetection.utils.getReadableLocation
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -25,36 +22,10 @@ fun ResultScreen(
     viewModel: CapturedHistoryViewModel
 ) {
     var frog by remember { mutableStateOf<CapturedFrog?>(null) }
-    var resolvedLocation by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current   // ✅ Correct way to get Context in Compose
 
     // ✅ Load frog from DB
     LaunchedEffect(frogId) {
         frog = viewModel.getFrogById(frogId.toInt())
-    }
-
-    // ✅ Try resolving missing location
-    LaunchedEffect(frog) {
-        val f = frog
-        if (f != null && f.locationName.isNullOrBlank()
-            && f.latitude != null && f.longitude != null
-            && f.latitude != 0.0 && f.longitude != 0.0
-        ) {
-            val readable = getReadableLocation(
-                context,
-                f.latitude,
-                f.longitude,
-                viewModel.placesClient   // ✅ use Places API first
-            )
-            if (!readable.isNullOrBlank()) {
-                resolvedLocation = readable
-                // Save back to DB so history/map uses it too
-                scope.launch {
-                    viewModel.insert(f.copy(locationName = readable))
-                }
-            }
-        }
     }
 
     Column(
@@ -68,6 +39,7 @@ fun ResultScreen(
             Text("Loading frog details...")
         } else {
             frog?.let { capturedFrog ->
+                // ✅ Show image
                 capturedFrog.imageUri?.let { uriString ->
                     Image(
                         painter = rememberAsyncImagePainter(Uri.parse(uriString)),
@@ -78,33 +50,34 @@ fun ResultScreen(
                     )
                 }
 
+                // ✅ Show species
                 Text(
                     text = capturedFrog.speciesName,
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
 
-                // ✅ Location fallback priority
+                // ✅ Location (already stored in DB)
                 val locationText = when {
                     !capturedFrog.locationName.isNullOrBlank() -> capturedFrog.locationName!!
-                    !resolvedLocation.isNullOrBlank() -> resolvedLocation!!
                     (capturedFrog.latitude != null && capturedFrog.longitude != null &&
                             capturedFrog.latitude != 0.0 && capturedFrog.longitude != 0.0) ->
                         "Lat: %.4f, Lon: %.4f".format(capturedFrog.latitude, capturedFrog.longitude)
-                    else -> "Locating..."
+                    else -> "Unknown Location"
                 }
 
                 Text(locationText, style = MaterialTheme.typography.bodyMedium)
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // ✅ Format timestamp
+                // ✅ Timestamp
                 val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
                 val dateString = formatter.format(Date(capturedFrog.timestamp))
                 Text("Captured: $dateString", style = MaterialTheme.typography.bodySmall)
 
                 Spacer(modifier = Modifier.height(24.dp))
 
+                // ✅ Buttons
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Button(onClick = { navController.navigate("home") }) {
                         Text("Back to Home")

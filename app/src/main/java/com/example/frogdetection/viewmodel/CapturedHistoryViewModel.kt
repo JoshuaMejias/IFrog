@@ -8,38 +8,21 @@ import com.example.frogdetection.database.CapturedFrogDatabase
 import com.example.frogdetection.data.CapturedFrogRepository
 import com.example.frogdetection.model.CapturedFrog
 import com.example.frogdetection.utils.getReadableLocation
-import com.google.android.libraries.places.api.Places
-import com.google.android.libraries.places.api.net.PlacesClient
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import java.util.*
 
 class CapturedHistoryViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: CapturedFrogRepository
     private val appContext = application.applicationContext
-    private val _placesClient: PlacesClient  // private backing field
-
-    // ✅ Public getter so screens can access it safely
-    val placesClient: PlacesClient
-        get() = _placesClient
+    private val apiKey = appContext.getString(R.string.google_maps_key) // ✅ get once
 
     init {
         val dao = CapturedFrogDatabase.getDatabase(application).capturedFrogDao()
         repository = CapturedFrogRepository(dao)
-
-        // ✅ Initialize Google Places API
-        if (!Places.isInitialized()) {
-            Places.initialize(
-                appContext,
-                appContext.getString(R.string.google_maps_key),
-                Locale.getDefault()
-            )
-        }
-        _placesClient = Places.createClient(appContext)
     }
 
     val capturedFrogs: StateFlow<List<CapturedFrog>> =
@@ -50,10 +33,10 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
         viewModelScope.launch {
             val updatedFrog = frog.copy(
                 locationName = getReadableLocation(
-                    appContext,
-                    frog.latitude,
-                    frog.longitude,
-                    _placesClient // ✅ Always use Google Places first
+                    context = appContext,
+                    latitude = frog.latitude,
+                    longitude = frog.longitude,
+                    apiKey = apiKey // ✅ always include API key
                 )
             )
             val newId = repository.insert(updatedFrog) // REPLACE on conflict
@@ -75,14 +58,14 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
                 val updated = frog.copy(
                     locationName = runBlocking {
                         getReadableLocation(
-                            appContext,
-                            frog.latitude,
-                            frog.longitude,
-                            _placesClient // ✅ Pass PlacesClient during migration too
+                            context = appContext,
+                            latitude = frog.latitude,
+                            longitude = frog.longitude,
+                            apiKey = apiKey // ✅ pass API key here too
                         )
                     }
                 )
-                repository.insert(updated) // ✅ REPLACE ensures update
+                repository.insert(updated) // ✅ REPLACE ensures update, not duplicate
             }
         }
     }
