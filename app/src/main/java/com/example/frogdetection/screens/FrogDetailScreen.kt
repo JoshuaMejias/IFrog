@@ -9,8 +9,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -56,10 +58,13 @@ fun FrogDetailScreen(navController: NavController, frogs: List<Frogs>, startInde
                     visible = true
                 }
 
+                // 🔽 Make details scrollable per page
                 Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()), // ✅ scrollable content
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Top,
-                    modifier = Modifier.fillMaxSize()
+                    verticalArrangement = Arrangement.Top
                 ) {
                     // Frog Image
                     AnimatedVisibility(
@@ -69,15 +74,14 @@ fun FrogDetailScreen(navController: NavController, frogs: List<Frogs>, startInde
                         Image(
                             painter = painterResource(id = frog.imageResId),
                             contentDescription = frog.name,
-                            contentScale = ContentScale.Crop, // fills and crops a little for uniform look
+                            contentScale = ContentScale.Crop,
                             modifier = Modifier
-                                .width(250.dp)   // wider
-                                .height(200.dp)  // taller
-                                .clip(RoundedCornerShape(16.dp)) // slightly larger curve
+                                .width(250.dp)
+                                .height(200.dp)
+                                .clip(RoundedCornerShape(16.dp))
                                 .background(Color.White, RoundedCornerShape(16.dp))
-                                .padding(6.dp) // small inner padding
+                                .padding(6.dp)
                         )
-
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -165,6 +169,8 @@ fun FrogDetailScreen(navController: NavController, frogs: List<Frogs>, startInde
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(60.dp)) // extra padding so last item not cut off
                 }
             }
 

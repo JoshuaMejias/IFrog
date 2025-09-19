@@ -1,7 +1,9 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    id("org.jetbrains.kotlin.kapt")
+//    id("com.google.devtools.ksp") version "1.9.24-1.0.20"
+    alias(libs.plugins.ksp)
+
 }
 
 android {
@@ -51,7 +53,6 @@ android {
 }
 
 dependencies {
-
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -69,21 +70,21 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-    implementation("com.google.accompanist:accompanist-permissions:0.37.0")
-    implementation("androidx.compose.animation:animation:1.7.0") // Match your Compose UI version
 
+    implementation("com.google.accompanist:accompanist-permissions:0.37.0")
+    implementation("androidx.compose.animation:animation:1.7.0")
     implementation("org.osmdroid:osmdroid-android:6.1.16")
     implementation("com.opencsv:opencsv:5.9")
-    implementation("com.google.accompanist:accompanist-permissions:0.36.0")
-
-    implementation("androidx.compose.ui:ui-tooling-preview:1.7.0") // For bitmap preview
+    implementation("androidx.compose.ui:ui-tooling-preview:1.7.0")
     implementation("androidx.navigation:navigation-compose:2.8.0")
-
     implementation("androidx.compose.material:material-icons-extended:1.7.0")
     implementation("io.coil-kt:coil-compose:2.4.0")
 
+    // ✅ Room with KSP (not kapt)
     implementation("androidx.room:room-runtime:2.6.1")
-    kapt("androidx.room:room-compiler:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
-
+    implementation("com.google.android.libraries.places:places:3.5.0")
+    implementation("com.google.android.gms:play-services-location:21.2.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3") // ✅ Fixes await()
 }

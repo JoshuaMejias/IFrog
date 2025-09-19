@@ -1,18 +1,17 @@
 package com.example.frogdetection.screens
 
-import android.graphics.Canvas
-import android.graphics.Paint
 import android.widget.Toast
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
+import com.example.frogdetection.R
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Overlay
+import org.osmdroid.views.overlay.Marker
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -31,7 +30,7 @@ fun DistributionMapScreen(
     // Center on selected frog if available
     focusedFrogId?.toIntOrNull()?.let { id ->
         frogs.find { it.id == id }?.let { frog ->
-            mapCenter = GeoPoint(frog.latitude, frog.longitude)
+            mapCenter = GeoPoint(frog.latitude ?: 0.0, frog.longitude ?: 0.0)
         }
     }
 
@@ -41,40 +40,46 @@ fun DistributionMapScreen(
                 setTileSource(TileSourceFactory.MAPNIK)
                 controller.setZoom(11.0)
                 controller.setCenter(mapCenter)
-
-                val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-
-                // Add red dots for frogs
-                frogs.forEach { frog ->
-                    val point = GeoPoint(frog.latitude, frog.longitude)
-                    val overlay = object : Overlay() {
-                        override fun draw(c: Canvas, osmv: MapView, shadow: Boolean) {
-                            val pt = osmv.projection.toPixels(point, null)
-                            val paint = Paint().apply {
-                                color = android.graphics.Color.RED
-                                style = Paint.Style.FILL
-                            }
-                            c.drawCircle(pt.x.toFloat(), pt.y.toFloat(), 8f, paint)
-                        }
-
-                        override fun onSingleTapConfirmed(e: android.view.MotionEvent?, mapView: MapView?): Boolean {
-                            val projection = mapView?.projection ?: return false
-                            val pt = projection.toPixels(point, null)
-                            val dx = (e?.x ?: return false) - pt.x.toFloat()
-                            val dy = (e?.y ?: return false) - pt.y.toFloat()
-
-                            // Detect tap near the dot (within 30px)
-                            if (dx * dx + dy * dy < 30 * 30) {
-                                val msg = "${frog.speciesName}\nCaptured: ${formatter.format(Date(frog.timestamp))}"
-                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                                return true
-                            }
-                            return false
-                        }
-                    }
-                    overlays.add(overlay)
-                }
             }
+        },
+        update = { mapView ->  // 🔧 ensures markers update instead of stacking
+            mapView.overlays.clear()
+
+            val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+
+            frogs.forEach { frog ->
+                val point = GeoPoint(frog.latitude ?: 0.0, frog.longitude ?: 0.0)
+
+                val locationName = frog.locationName
+
+                val marker = Marker(mapView).apply {
+                    position = point
+                    icon = ContextCompat.getDrawable(context, R.drawable.frog_marker)
+                    title = frog.speciesName
+                    subDescription = buildString {
+                        append(
+                            "📍 ${
+                                locationName ?: "Lat: %.4f, Lon: %.4f".format(
+                                    frog.latitude,
+                                    frog.longitude
+                                )
+                            }\n"
+                        )
+                        append("🕒 ${formatter.format(Date(frog.timestamp))}")
+                    }
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+
+                    setOnMarkerClickListener { _, _ ->
+                        val msg = "$title\n$subDescription"
+                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        true
+                    }
+                }
+
+                mapView.overlays.add(marker)
+            }
+
+            mapView.invalidate()
         }
     )
 }

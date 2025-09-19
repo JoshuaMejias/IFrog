@@ -6,7 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -20,9 +20,33 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import coil.compose.rememberAsyncImagePainter
 import com.example.frogdetection.R
+import com.example.frogdetection.database.CapturedFrogDatabase
+import com.example.frogdetection.model.CapturedFrog
+import com.example.frogdetection.utils.getReadableLocation
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
-fun ImagePreviewScreen(navController: NavController, imageUri: String?) {
+fun ImagePreviewScreen(
+    navController: NavController,
+    imageUri: String?,
+    latitude: Double?,
+    longitude: Double?
+) {
+    val context = navController.context
+    var resolvedLocation by remember { mutableStateOf<String?>(null) }
+
+    // ✅ Resolve location using LocationUtils (OSM → Google → raw lat/lon)
+    LaunchedEffect(latitude, longitude) {
+        if (latitude != null && longitude != null &&
+            latitude != 0.0 && longitude != 0.0
+        ) {
+            resolvedLocation = getReadableLocation(context, latitude, longitude)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -72,12 +96,52 @@ fun ImagePreviewScreen(navController: NavController, imageUri: String?) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(
-                onClick = { navController.popBackStack() },
-                modifier = Modifier.fillMaxWidth(0.9f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF90EE90))
+            // ✅ Show resolved location
+            Text(
+                text = resolvedLocation ?: "Locating...",
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.DarkGray
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                Text("Back", color = Color(0xFF004400))
+                Button(
+                    onClick = { navController.popBackStack() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF90EE90))
+                ) {
+                    Text("Cancel", color = Color(0xFF004400))
+                }
+
+                Button(
+                    onClick = {
+                        if (imageUri != null) {
+                            val dao = CapturedFrogDatabase.getDatabase(context).capturedFrogDao()
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val frog = CapturedFrog(
+                                    imageUri = imageUri,
+                                    latitude = latitude ?: 0.0,
+                                    longitude = longitude ?: 0.0,
+                                    locationName = resolvedLocation,
+                                    speciesName = "Unknown Species", // TODO: Replace with YOLO
+                                    timestamp = System.currentTimeMillis()
+                                )
+                                val newId = dao.insert(frog)
+                                withContext(Dispatchers.Main) {
+                                    navController.navigate("resultScreen/$newId") {
+                                        popUpTo("preview/{imageUri}/{lat}/{lon}") { inclusive = true }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF66BB6A))
+                ) {
+                    Text("Save & Continue", color = Color.White)
+                }
             }
         }
     }

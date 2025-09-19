@@ -3,18 +3,24 @@ package com.example.frogdetection.model
 import android.net.Uri
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import androidx.room.TypeConverters
-import com.example.frogdetection.data.UriTypeConverter
+import androidx.room.TypeConverter
 
 @Entity(tableName = "captured_frogs")
-@TypeConverters(UriTypeConverter::class)
 data class CapturedFrog(
-    @PrimaryKey(autoGenerate = true)
-    val id: Int = 0, // Room will generate ID automatically
-
-    val imageUri: Uri,
-    val latitude: Double,
-    val longitude: Double,
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val imageUri: String,   // store URI as String
+    val latitude: Double?,
+    val longitude: Double?,
     val speciesName: String,
-    val timestamp: Long // store capture time in millis
+    val timestamp: Long,
+    val locationName: String? = null // ✅ Human-readable address cached
 )
+
+// Optional converter for Uri (if you want to use Uri directly in your models)
+class Converters {
+    @TypeConverter
+    fun fromUri(uri: Uri?): String? = uri?.toString()
+
+    @TypeConverter
+    fun toUri(uriString: String?): Uri? = uriString?.let { Uri.parse(it) }
+}
