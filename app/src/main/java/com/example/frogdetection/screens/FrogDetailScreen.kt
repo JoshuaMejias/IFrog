@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -13,6 +14,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -58,11 +63,10 @@ fun FrogDetailScreen(navController: NavController, frogs: List<Frogs>, startInde
                     visible = true
                 }
 
-                // 🔽 Make details scrollable per page
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState()), // ✅ scrollable content
+                        .verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Top
                 ) {
@@ -124,53 +128,144 @@ fun FrogDetailScreen(navController: NavController, frogs: List<Frogs>, startInde
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Local Name Card
+                    // 🟢 Expandable Caution Card (auto-expanded if NOT edible)
+                    var expanded by remember { mutableStateOf(frog.status.lowercase() != "edible") }
+                    val cautionText = if (frog.status.lowercase() == "edible") {
+                        "Although considered edible, proper preparation and cooking are necessary to ensure safety and avoid potential health risks. Consuming improperly cooked frog meat may expose individuals to parasites or bacteria."
+                    } else {
+                        "This species is not recommended for consumption due to possible toxins, ecological importance, or cultural reasons. Consuming it may pose health risks and disrupt local biodiversity."
+                    }
+
                     Card(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                2.dp,
+                                if (frog.status.lowercase() == "edible") Color(0xFF10B981) else Color(0xFFDC2626),
+                                RoundedCornerShape(16.dp)
+                            ),
                         shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFBBF7D0)),
-                        elevation = CardDefaults.cardElevation(4.dp)
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (frog.status.lowercase() == "edible") Color(0xFFD1FAE5) else Color(0xFFFEE2E2)
+                        ),
+                        elevation = CardDefaults.cardElevation(6.dp)
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = "Local Name",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF065F46)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { expanded = !expanded }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "Caution",
+                                    tint = if (frog.status.lowercase() == "edible") Color(0xFF065F46) else Color(0xFF7F1D1D),
+                                    modifier = Modifier.size(20.dp)
                                 )
-                            )
-                            Text(
-                                text = frog.localName,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "⚠️ Caution",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (frog.status.lowercase() == "edible") Color(0xFF065F46) else Color(0xFF7F1D1D)
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Icon(
+                                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = if (expanded) "Collapse" else "Expand",
+                                    tint = Color.Gray
+                                )
+                            }
+
+                            AnimatedVisibility(
+                                visible = expanded,
+                                enter = fadeIn() + expandVertically(),
+                                exit = fadeOut() + shrinkVertically()
+                            ) {
+                                Column {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = cautionText,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Local Name Card
+                    DetailCard(
+                        title = "Local Name",
+                        content = frog.localName,
+                        color = Color(0xFFBBF7D0),
+                        titleColor = Color(0xFF065F46)
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Description Card
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE0F2FE)),
-                        elevation = CardDefaults.cardElevation(4.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = "Description",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF075985)
-                                )
-                            )
-                            Text(
-                                text = frog.description,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
+                    DetailCard(
+                        title = "Description",
+                        content = frog.description,
+                        color = Color(0xFFE0F2FE),
+                        titleColor = Color(0xFF075985)
+                    )
 
-                    Spacer(modifier = Modifier.height(60.dp)) // extra padding so last item not cut off
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Habitat Card
+                    DetailCard(
+                        title = "Habitat",
+                        content = frog.habitat,
+                        color = Color(0xFFFDE68A),
+                        titleColor = Color(0xFF92400E)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Physical Characteristics Card
+                    DetailCard(
+                        title = "Physical Characteristics",
+                        content = frog.physicalCharacteristics,
+                        color = Color(0xFFFBCFE8),
+                        titleColor = Color(0xFF9D174D)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Behavior Card
+                    DetailCard(
+                        title = "Behavior",
+                        content = frog.behavior,
+                        color = Color(0xFFD9F99D),
+                        titleColor = Color(0xFF365314)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Diet Card
+                    DetailCard(
+                        title = "Diet",
+                        content = frog.diet,
+                        color = Color(0xFFBAE6FD),
+                        titleColor = Color(0xFF075985)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Conservation Status Card
+                    DetailCard(
+                        title = "Conservation Status",
+                        content = frog.conservationStatus,
+                        color = Color(0xFFE5E7EB),
+                        titleColor = Color(0xFF374151)
+                    )
+
+                    Spacer(modifier = Modifier.height(60.dp))
                 }
             }
 
@@ -203,16 +298,43 @@ fun FrogDetailScreen(navController: NavController, frogs: List<Frogs>, startInde
             Spacer(modifier = Modifier.height(16.dp))
 
             // Back Button
-            Button(
-                onClick = { navController.popBackStack() },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth(0.5f)
-                    .align(Alignment.CenterHorizontally)
-            ) {
-                Text("Back", color = Color.White, fontWeight = FontWeight.Bold)
-            }
+//            Button(
+//                onClick = { navController.popBackStack() },
+//                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+//                shape = RoundedCornerShape(12.dp),
+//                modifier = Modifier
+//                    .fillMaxWidth(0.5f)
+//                    .align(Alignment.CenterHorizontally)
+//            ) {
+//                Text("Back", color = Color.White, fontWeight = FontWeight.Bold)
+//            }
+        }
+    }
+}
+
+/**
+ * Small reusable card for displaying frog details.
+ */
+@Composable
+fun DetailCard(title: String, content: String, color: Color, titleColor: Color) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = color),
+        elevation = CardDefaults.cardElevation(4.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = titleColor
+                )
+            )
+            Text(
+                text = content,
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }

@@ -3,63 +3,70 @@ package com.example.frogdetection.utils
 import android.content.Context
 import android.location.Geocoder
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.net.URL
+import com.google.android.libraries.places.api.model.Place
+import com.google.android.libraries.places.api.net.FetchPlaceRequest
+import com.google.android.libraries.places.api.net.PlacesClient
+import kotlinx.coroutines.tasks.await
 import java.util.*
 
 suspend fun getReadableLocation(
     context: Context,
     latitude: Double?,
     longitude: Double?,
-    apiKey: String? = null
-): String = withContext(Dispatchers.IO) {
+    placesClient: PlacesClient? = null
+): String {
     if (latitude == null || longitude == null || (latitude == 0.0 && longitude == 0.0)) {
-        return@withContext "Unknown Location"
+        return "Unknown Location"
     }
 
-    // 1️⃣ Try Android Geocoder (offline)
+    // ✅ Prefer Geocoder (Barangay → Municipality → Province → Country)
     try {
         val geocoder = Geocoder(context, Locale.getDefault())
         val addresses = geocoder.getFromLocation(latitude, longitude, 1)
         if (!addresses.isNullOrEmpty()) {
             val addr = addresses[0]
 
-            val barangay = addr.subLocality ?: ""
-            val municipality = addr.locality ?: addr.subAdminArea ?: ""
-            val province = addr.adminArea ?: ""
-            val country = addr.countryName ?: ""
+            val building = addr.featureName ?: ""       // May contain landmark/POI
+            val barangay = addr.subLocality ?: ""       // Barangay
+            val municipality = addr.locality ?: addr.subAdminArea ?: "" // City/Municipality
+            val province = addr.adminArea ?: ""         // Province
+            val country = addr.countryName ?: ""        // Country
 
-            val formatted = listOf(barangay, municipality, province, country)
+            return listOf(building, barangay, municipality, province, country)
                 .filter { it.isNotBlank() }
                 .joinToString(", ")
-
-            if (barangay.isNotBlank()) {
-                return@withContext formatted  // ✅ Barangay found, good enough
-            }
         }
     } catch (e: Exception) {
-        Log.w("getReadableLocation", "Geocoder failed: ${e.message}")
+        Log.e("getReadableLocation", "Geocoder failed: ${e.message}")
     }
 
-    // 2️⃣ Fallback: Google Geocoding API (online, needs API key)
-    if (!apiKey.isNullOrBlank()) {
+    // ✅ Fallback: Google Places API
+    if (placesClient != null) {
         try {
-            val url =
-                "https://maps.googleapis.com/maps/api/geocode/json?latlng=$latitude,$longitude&key=$apiKey&language=en"
-            val response = URL(url).readText()
-            val json = JSONObject(response)
-            val results = json.getJSONArray("results")
-            if (results.length() > 0) {
-                val formattedAddress = results.getJSONObject(0).getString("formatted_address")
-                return@withContext formattedAddress
+            val placeFields = listOf(
+                Place.Field.NAME,       // POI/Building
+                Place.Field.ADDRESS     // Full formatted address
+            )
+            val request = FetchPlaceRequest.newInstance(
+                "$latitude,$longitude", placeFields
+            )
+
+            val response = placesClient.fetchPlace(request).await()
+            val place = response.place
+
+            val building = place.name ?: ""
+            val address = place.address ?: ""
+
+            return if (building.isNotBlank()) {
+                "$building, $address"
+            } else {
+                address
             }
         } catch (e: Exception) {
-            Log.e("getReadableLocation", "Google Geocoding failed: ${e.message}")
+            Log.w("getReadableLocation", "Google Places failed: ${e.message}")
         }
     }
 
-    // 3️⃣ Fallback: Just lat/lon
-    return@withContext "Lat: %.4f, Lon: %.4f".format(latitude, longitude)
+    // ✅ Final fallback
+    return "Lat: %.4f, Lon: %.4f".format(latitude, longitude)
 }

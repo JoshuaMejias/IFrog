@@ -3,11 +3,12 @@ package com.example.frogdetection.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.frogdetection.R
 import com.example.frogdetection.database.CapturedFrogDatabase
 import com.example.frogdetection.data.CapturedFrogRepository
 import com.example.frogdetection.model.CapturedFrog
 import com.example.frogdetection.utils.getReadableLocation
+import com.google.android.libraries.places.api.Places
+import com.google.android.libraries.places.api.net.PlacesClient
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -18,11 +19,18 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
 
     private val repository: CapturedFrogRepository
     private val appContext = application.applicationContext
-    private val apiKey = appContext.getString(R.string.google_maps_key) // ✅ get once
+
+    // ✅ Initialize Places API once
+    val placesClient: PlacesClient
 
     init {
         val dao = CapturedFrogDatabase.getDatabase(application).capturedFrogDao()
         repository = CapturedFrogRepository(dao)
+
+        if (!Places.isInitialized()) {
+            Places.initialize(appContext, appContext.getString(com.example.frogdetection.R.string.google_maps_key))
+        }
+        placesClient = Places.createClient(appContext)
     }
 
     val capturedFrogs: StateFlow<List<CapturedFrog>> =
@@ -36,7 +44,7 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
                     context = appContext,
                     latitude = frog.latitude,
                     longitude = frog.longitude,
-                    apiKey = apiKey // ✅ always include API key
+                    placesClient = placesClient // ✅ pass Places client
                 )
             )
             val newId = repository.insert(updatedFrog) // REPLACE on conflict
@@ -61,7 +69,7 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
                             context = appContext,
                             latitude = frog.latitude,
                             longitude = frog.longitude,
-                            apiKey = apiKey // ✅ pass API key here too
+                            placesClient = placesClient // ✅ pass Places client
                         )
                     }
                 )

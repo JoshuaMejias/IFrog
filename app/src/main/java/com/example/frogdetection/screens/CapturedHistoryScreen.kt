@@ -1,5 +1,6 @@
 package com.example.frogdetection.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,13 +12,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import coil.compose.rememberAsyncImagePainter
 import com.example.frogdetection.R
 import com.example.frogdetection.model.CapturedFrog
+import com.example.frogdetection.utils.getReadableLocation
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -65,7 +69,8 @@ fun CapturedHistoryScreen(
                     CapturedFrogItem(
                         frog = frog,
                         onClick = { navController.navigate("map/${frog.id}") },
-                        onDelete = { viewModel.deleteFrog(frog) }
+                        onDelete = { viewModel.deleteFrog(frog) },
+                        viewModel = viewModel
                     )
                 }
             }
@@ -77,11 +82,37 @@ fun CapturedHistoryScreen(
 fun CapturedFrogItem(
     frog: CapturedFrog,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    viewModel: CapturedHistoryViewModel
 ) {
     val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     val dateString = formatter.format(Date(frog.timestamp))
     var showDialog by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var resolvedLocation by remember { mutableStateOf(frog.locationName) }
+
+    // ✅ Auto-resolve location if missing
+    LaunchedEffect(frog.id) {
+        if (resolvedLocation.isNullOrBlank() &&
+            frog.latitude != null && frog.longitude != null &&
+            frog.latitude != 0.0 && frog.longitude != 0.0
+        ) {
+            val readable = getReadableLocation(
+                context = context,
+                latitude = frog.latitude,
+                longitude = frog.longitude,
+                placesClient = viewModel.placesClient
+            )
+            if (!readable.isNullOrBlank()) {
+                resolvedLocation = readable
+                scope.launch {
+                    viewModel.insert(frog.copy(locationName = readable))
+                }
+            }
+        }
+    }
 
     if (showDialog) {
         AlertDialog(
@@ -131,15 +162,11 @@ fun CapturedFrogItem(
                 Column {
                     Text(frog.speciesName, style = MaterialTheme.typography.titleMedium)
 
-                    // ✅ Location comes straight from DB
-                    val locationText = when {
-                        !frog.locationName.isNullOrBlank() -> frog.locationName!!
-                        (frog.latitude != null && frog.longitude != null &&
-                                frog.latitude != 0.0 && frog.longitude != 0.0) ->
-                            "Lat: %.4f, Lon: %.4f".format(frog.latitude, frog.longitude)
-                        else -> "Unknown Location"
-                    }
-                    Text(locationText, style = MaterialTheme.typography.bodyMedium)
+                    // ✅ Use resolved location
+                    Text(
+                        resolvedLocation ?: "Unknown Location",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
 
                     Text("Captured: $dateString", style = MaterialTheme.typography.bodySmall)
                 }
