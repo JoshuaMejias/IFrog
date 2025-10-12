@@ -2,23 +2,34 @@ package com.example.frogdetection.screens
 
 import android.graphics.*
 import android.graphics.drawable.BitmapDrawable
-import android.graphics.drawable.Drawable
-import android.widget.Toast
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import android.net.Uri
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
+import coil.ImageLoader
+import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
+import coil.request.SuccessResult
 import com.example.frogdetection.R
+import com.example.frogdetection.model.CapturedFrog
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
+import kotlinx.coroutines.*
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Overlay
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
 @Composable
 fun DistributionMapScreen(
@@ -26,132 +37,234 @@ fun DistributionMapScreen(
     viewModel: CapturedHistoryViewModel,
     focusedFrogId: String? = null
 ) {
-    val frogs = viewModel.capturedFrogs.collectAsState(initial = emptyList()).value
+    val frogs by viewModel.capturedFrogs.collectAsState(initial = emptyList())
     val context = LocalContext.current
+    var selectedFrog by remember { mutableStateOf<CapturedFrog?>(null) }
+    var markerPosition by remember { mutableStateOf<GeoPoint?>(null) }
+    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
 
-    // Default center: Bohol
-    var mapCenter = GeoPoint(9.85, 124.14)
-    var zoomLevel = 11.0
+    // Cache for marker bitmaps (by URI)
+    val markerBitmaps = remember { mutableStateMapOf<String, Bitmap>() }
 
-    // Focused frog (if navigated from history)
-    var focusedFrog: GeoPoint? = null
-    focusedFrogId?.toIntOrNull()?.let { id ->
-        frogs.find { it.id == id }?.let { frog ->
-            focusedFrog = GeoPoint(frog.latitude ?: 0.0, frog.longitude ?: 0.0)
-            mapCenter = focusedFrog!!
-            zoomLevel = 14.0
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { ctx ->
+                MapView(ctx).apply {
+                    setTileSource(TileSourceFactory.MAPNIK)
+                    setMultiTouchControls(true)
+                    zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
+                    controller.setZoom(11.0)
+                    controller.setCenter(GeoPoint(9.85, 124.14))
+                    mapViewRef = this
+                }
+            },
+            update = { mapView ->
+                mapViewRef = mapView
+            }
+        )
+
+        // 🧠 Auto-refresh markers whenever frogs data changes
+        LaunchedEffect(frogs) {
+            val mapView = mapViewRef ?: return@LaunchedEffect
+            withContext(Dispatchers.IO) {
+                val markers = frogs.mapNotNull { frog ->
+                    val lat = frog.latitude ?: return@mapNotNull null
+                    val lon = frog.longitude ?: return@mapNotNull null
+                    val point = GeoPoint(lat, lon)
+                    val isFocused = frog.id.toString() == focusedFrogId
+
+                    val pinBitmap = markerBitmaps[frog.imageUri] ?: run {
+                        val img = loadBitmapFromUri(context, frog.imageUri)
+                        val bmp = createPhotoPinMarker(context, img, isFocused)
+                        markerBitmaps[frog.imageUri ?: ""] = bmp
+                        bmp
+                    }
+
+                    Marker(mapView).apply {
+                        position = point
+                        title = frog.speciesName
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        icon = BitmapDrawable(context.resources, pinBitmap)
+                        setOnMarkerClickListener { _, _ ->
+                            selectedFrog = frog
+                            markerPosition = point
+                            true
+                        }
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    mapView.overlays.clear()
+                    mapView.overlays.addAll(markers)
+
+                    // Dismiss popup on empty tap
+                    mapView.overlays.add(object : Overlay() {
+                        override fun onSingleTapConfirmed(
+                            e: android.view.MotionEvent?,
+                            mapView: MapView?
+                        ): Boolean {
+                            selectedFrog = null
+                            return super.onSingleTapConfirmed(e, mapView)
+                        }
+                    })
+
+                    mapView.invalidate()
+                }
+            }
+        }
+
+        // 🧭 Focus on frog when clicked from history
+        LaunchedEffect(frogs, focusedFrogId) {
+            val mapView = mapViewRef ?: return@LaunchedEffect
+            val frog = frogs.find { it.id.toString() == focusedFrogId }
+            if (frog != null && frog.latitude != null && frog.longitude != null) {
+                delay(300) // wait for markers
+                val point = GeoPoint(frog.latitude!!, frog.longitude!!)
+                mapView.controller.animateTo(point, 15.0, 1200L)
+            }
+        }
+
+        // 🐸 Popup info card
+        if (selectedFrog != null && markerPosition != null) {
+            FrogPopupCard(
+                frog = selectedFrog!!,
+                navController = navController,
+                position = markerPosition!!
+            )
         }
     }
+}
 
-    AndroidView(
-        factory = { ctx ->
-            MapView(ctx).apply {
-                setTileSource(TileSourceFactory.MAPNIK)
-                setMultiTouchControls(true) // ✅ pinch zoom enabled
-                zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
-
-                controller.setZoom(zoomLevel)
-                controller.setCenter(mapCenter)
-
-                focusedFrog?.let {
-                    controller.animateTo(it, zoomLevel, 1500L)
-                }
+@Composable
+fun FrogPopupCard(frog: CapturedFrog, navController: NavController, position: GeoPoint) {
+    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = 120.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .width(220.dp)
+                .wrapContentHeight(),
+            elevation = CardDefaults.cardElevation(8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .padding(12.dp)
+                    .clickable { navController.navigate("resultScreen/${frog.id}") }
+            ) {
+                Image(
+                    painter = rememberAsyncImagePainter(frog.imageUri),
+                    contentDescription = frog.speciesName,
+                    modifier = Modifier
+                        .size(100.dp)
+                        .padding(4.dp)
+                )
+                Text(frog.speciesName, style = MaterialTheme.typography.titleMedium)
+                Text(frog.locationName ?: "Unknown", style = MaterialTheme.typography.bodySmall)
+                Text(formatter.format(Date(frog.timestamp)), style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tap for details",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelSmall
+                )
             }
-        },
-        update = { mapView ->
-            mapView.overlays.clear()
-            val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-
-            frogs.forEach { frog ->
-                val lat = frog.latitude ?: 0.0
-                val lon = frog.longitude ?: 0.0
-                val point = GeoPoint(lat, lon)
-
-                val isFocused = frog.id.toString() == focusedFrogId
-                val baseIcon = ContextCompat.getDrawable(context, R.drawable.frog_marker)!!
-
-                val marker = Marker(mapView).apply {
-                    position = point
-                    title = frog.speciesName
-                    subDescription = buildString {
-                        append("📍 ${frog.locationName ?: "Lat: %.4f, Lon: %.4f".format(lat, lon)}\n")
-                        append("🕒 ${formatter.format(Date(frog.timestamp))}")
-                    }
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-
-                    icon = if (isFocused) {
-                        resizeAndStrokeMarker(baseIcon, 3.0f, Color.BLACK, 20f, true)
-                    } else {
-                        resizeAndStrokeMarker(baseIcon, 1.5f, Color.TRANSPARENT, 0f, false)
-                    }
-
-                    setOnMarkerClickListener { _, _ ->
-                        val msg = "$title\n$subDescription"
-                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                        true
-                    }
-                }
-
-                mapView.overlays.add(marker)
-
-                // ✅ Zoom in to focused marker
-                if (isFocused) {
-                    mapView.controller.animateTo(marker.position, 15.0, 1500L)
-                }
-            }
-
-            mapView.invalidate()
         }
-    )
+    }
 }
 
 /**
- * Resize and add stroke/shadow to the marker.
+ * Safely loads a bitmap from a URI.
  */
-fun resizeAndStrokeMarker(
-    original: Drawable,
-    scaleFactor: Float,
-    strokeColor: Int,
-    strokeWidth: Float,
-    addShadow: Boolean
-): Drawable {
-    val width = (original.intrinsicWidth * scaleFactor).toInt()
-    val height = (original.intrinsicHeight * scaleFactor).toInt()
+suspend fun loadBitmapFromUri(context: android.content.Context, uriString: String?): Bitmap? {
+    if (uriString.isNullOrEmpty()) return null
+    return try {
+        val loader = ImageLoader(context)
+        val request = ImageRequest.Builder(context)
+            .data(Uri.parse(uriString))
+            .allowHardware(false)
+            .build()
+        val result = (loader.execute(request) as? SuccessResult)?.drawable as? BitmapDrawable
+        result?.bitmap
+    } catch (e: Exception) {
+        null
+    }
+}
 
-    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bmp)
+/**
+ * 🟢 Custom teardrop-style green frog marker.
+ */
+fun createPhotoPinMarker(context: android.content.Context, photo: Bitmap?, isFocused: Boolean): Bitmap {
+    val pinWidth = 100
+    val pinHeight = (pinWidth * 1.4f).toInt()
+    val bitmap = Bitmap.createBitmap(pinWidth, pinHeight, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-    // Optional shadow for focus effect
-    if (addShadow) {
-        val shadowPaint = Paint().apply {
-            color = Color.BLACK
-            maskFilter = BlurMaskFilter(12f, BlurMaskFilter.Blur.NORMAL)
+    val baseColor = if (isFocused) Color.parseColor("#2E7D32") else Color.parseColor("#4CAF50")
+    paint.color = baseColor
+
+    val cx = pinWidth / 2f
+    val cy = pinHeight / 2.8f
+    val radius = pinWidth / 3.2f
+
+    // Draw teardrop body
+    val path = Path().apply {
+        moveTo(cx, pinHeight.toFloat())
+        quadTo(pinWidth.toFloat(), pinHeight * 0.25f, cx + radius, cy)
+        arcTo(RectF(cx - radius, cy - radius, cx + radius, cy + radius), 0f, 180f, false)
+        quadTo(0f, pinHeight * 0.25f, cx, pinHeight.toFloat())
+        close()
+    }
+    canvas.drawPath(path, paint)
+
+    // White circle frame
+    val innerRadius = pinWidth / 4.5f
+    paint.color = Color.WHITE
+    canvas.drawCircle(cx, cy, innerRadius + 5f, paint)
+
+    // Frog photo or fallback
+    photo?.let {
+        val scaled = Bitmap.createScaledBitmap(it, (innerRadius * 2).toInt(), (innerRadius * 2).toInt(), true)
+        val shader = BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        paint.shader = shader
+        canvas.drawCircle(cx, cy, innerRadius, paint)
+        paint.shader = null
+    } ?: run {
+        val fallbackDrawable = ContextCompat.getDrawable(context, R.drawable.frog_marker)
+        if (fallbackDrawable != null) {
+            val fallbackBitmap = Bitmap.createBitmap(
+                fallbackDrawable.intrinsicWidth.coerceAtLeast(1),
+                fallbackDrawable.intrinsicHeight.coerceAtLeast(1),
+                Bitmap.Config.ARGB_8888
+            )
+            val fallbackCanvas = Canvas(fallbackBitmap)
+            fallbackDrawable.setBounds(0, 0, fallbackCanvas.width, fallbackCanvas.height)
+            fallbackDrawable.draw(fallbackCanvas)
+
+            canvas.drawBitmap(
+                fallbackBitmap,
+                null,
+                RectF(cx - innerRadius, cy - innerRadius, cx + innerRadius, cy + innerRadius),
+                null
+            )
         }
-        val cx = width / 2f
-        val cy = height / 2f
-        val radius = width.coerceAtMost(height) / 2f
-        canvas.drawCircle(cx, cy, radius, shadowPaint)
     }
 
-    // Draw original marker scaled
-    original.setBounds(0, 0, width, height)
-    original.draw(canvas)
-
-    // Draw stroke if needed
-    if (strokeWidth > 0f) {
-        val paint = Paint().apply {
-            color = strokeColor
+    // Focused marker outline
+    if (isFocused) {
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
             style = Paint.Style.STROKE
-            this.strokeWidth = strokeWidth
-            isAntiAlias = true
+            strokeWidth = 6f
         }
-
-        val centerX = width / 2f
-        val centerY = height / 2f
-        val radius = (width.coerceAtMost(height) / 2f) - strokeWidth / 2
-
-        canvas.drawCircle(centerX, centerY, radius, paint)
+        canvas.drawPath(path, strokePaint)
     }
 
-    return BitmapDrawable(null, bmp)
+    return bitmap
 }

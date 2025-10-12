@@ -15,11 +15,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavController
 import coil.compose.rememberAsyncImagePainter
 import com.example.frogdetection.R
 import com.example.frogdetection.model.CapturedFrog
-import com.example.frogdetection.utils.getReadableLocation
+import com.example.frogdetection.utils.getReadableLocationFromOpenCage
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -27,10 +26,10 @@ import java.util.*
 
 @Composable
 fun CapturedHistoryScreen(
-    navController: NavController,
+    navController: androidx.navigation.NavController,
     viewModel: CapturedHistoryViewModel
 ) {
-    val capturedFrogs = viewModel.capturedFrogs.collectAsState(initial = emptyList()).value
+    val capturedFrogs by viewModel.capturedFrogs.collectAsState(initial = emptyList())
 
     Column(
         modifier = Modifier
@@ -93,21 +92,22 @@ fun CapturedFrogItem(
     val scope = rememberCoroutineScope()
     var resolvedLocation by remember { mutableStateOf(frog.locationName) }
 
-    // ✅ Auto-resolve location if missing
+    // ✅ Auto-fetch readable name from OpenCage if missing
     LaunchedEffect(frog.id) {
         if (resolvedLocation.isNullOrBlank() &&
             frog.latitude != null && frog.longitude != null &&
             frog.latitude != 0.0 && frog.longitude != 0.0
         ) {
-            val readable = getReadableLocation(
+            val readable = getReadableLocationFromOpenCage(
                 context = context,
                 latitude = frog.latitude,
                 longitude = frog.longitude,
-                placesClient = viewModel.placesClient
+                apiKey = context.getString(R.string.opencage_api_key)
             )
-            if (!readable.isNullOrBlank()) {
+            if (readable.isNotBlank()) {
                 resolvedLocation = readable
                 scope.launch {
+                    // ✅ Update in DB (caches automatically)
                     viewModel.insert(frog.copy(locationName = readable))
                 }
             }
@@ -124,6 +124,7 @@ fun CapturedFrogItem(
                     onClick = {
                         onDelete()
                         showDialog = false
+                        Toast.makeText(context, "Frog deleted", Toast.LENGTH_SHORT).show()
                     }
                 ) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
@@ -139,7 +140,8 @@ fun CapturedFrogItem(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Row(
             modifier = Modifier
@@ -161,13 +163,10 @@ fun CapturedFrogItem(
                 )
                 Column {
                     Text(frog.speciesName, style = MaterialTheme.typography.titleMedium)
-
-                    // ✅ Use resolved location
                     Text(
                         resolvedLocation ?: "Unknown Location",
                         style = MaterialTheme.typography.bodyMedium
                     )
-
                     Text("Captured: $dateString", style = MaterialTheme.typography.bodySmall)
                 }
             }

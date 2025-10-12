@@ -1,5 +1,6 @@
 package com.example.frogdetection
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,19 +13,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
+import androidx.navigation.navArgument
 import com.example.frogdetection.screens.*
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
-import android.net.Uri
-import com.google.android.libraries.places.api.Places
-import androidx.navigation.navArgument
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (!Places.isInitialized()) {
-            Places.initialize(applicationContext, getString(R.string.google_maps_key))
-        }
 
         setContent {
             iFrogTheme {
@@ -36,6 +31,7 @@ class MainActivity : ComponentActivity() {
                     factory = ViewModelProvider.AndroidViewModelFactory(application)
                 )
 
+                // ✅ Automatically fill in missing location names using OpenCage
                 LaunchedEffect(Unit) {
                     historyViewModel.migrateMissingLocations()
                 }
@@ -56,13 +52,19 @@ class MainActivity : ComponentActivity() {
                         composable("splash") { SplashScreen(navController) }
                         composable("welcome") { WelcomeScreen(navController) }
                         composable("home") { HomeScreen(navController) }
-                        composable("dictionary") { FrogDictionaryScreen(navController, frogs = frogList) }
+                        composable("dictionary") {
+                            FrogDictionaryScreen(navController, frogs = frogList)
+                        }
 
                         composable("frogDetail/{frogName}") { backStackEntry ->
                             val frogName = backStackEntry.arguments?.getString("frogName")
                             val startIndex = frogList.indexOfFirst { it.name == frogName }
                             if (startIndex != -1) {
-                                FrogDetailScreen(navController, frogs = frogList, startIndex = startIndex)
+                                FrogDetailScreen(
+                                    navController,
+                                    frogs = frogList,
+                                    startIndex = startIndex
+                                )
                             }
                         }
 
@@ -84,8 +86,15 @@ class MainActivity : ComponentActivity() {
 
                         composable("about") { AboutScreen(navController) }
 
-                        // ✅ Updated: preview now accepts lat & lon
-                        composable("preview/{imageUri}/{lat}/{lon}") { backStackEntry ->
+                        // ✅ Preview now accepts lat/lon for image capture
+                        composable(
+                            "preview/{imageUri}/{lat}/{lon}",
+                            arguments = listOf(
+                                navArgument("imageUri") { type = NavType.StringType },
+                                navArgument("lat") { type = NavType.StringType },
+                                navArgument("lon") { type = NavType.StringType }
+                            )
+                        ) { backStackEntry ->
                             val encodedUri = backStackEntry.arguments?.getString("imageUri")
                             val decodedUri = encodedUri?.let { Uri.decode(it) }
                             val lat = backStackEntry.arguments?.getString("lat")?.toDoubleOrNull()
@@ -98,7 +107,6 @@ class MainActivity : ComponentActivity() {
                                 longitude = lon
                             )
                         }
-
 
                         composable("resultScreen/{frogId}") { backStackEntry ->
                             val frogId = backStackEntry.arguments?.getString("frogId")?.toLongOrNull()

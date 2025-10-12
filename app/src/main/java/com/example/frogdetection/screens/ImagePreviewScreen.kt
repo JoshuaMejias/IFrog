@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import coil.compose.rememberAsyncImagePainter
 import com.example.frogdetection.R
-import com.example.frogdetection.database.CapturedFrogDatabase
+import com.example.frogdetection.data.CapturedFrogDatabase
 import com.example.frogdetection.model.CapturedFrog
 import com.example.frogdetection.utils.getReadableLocation
 import kotlinx.coroutines.CoroutineScope
