@@ -265,7 +265,7 @@ fun FrogDetailScreen(navController: NavController, frogs: List<Frogs>, startInde
                         titleColor = Color(0xFF374151)
                     )
 
-                    Spacer(modifier = Modifier.height(60.dp))
+//                    Spacer(modifier = Modifier.height(60.dp))
                 }
             }
 

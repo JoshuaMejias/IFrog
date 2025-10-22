@@ -1,72 +1,82 @@
 package com.example.frogdetection.utils
 
 import android.content.Context
-import android.location.Geocoder
 import android.util.Log
-import com.google.android.libraries.places.api.model.Place
-import com.google.android.libraries.places.api.net.FetchPlaceRequest
-import com.google.android.libraries.places.api.net.PlacesClient
-import kotlinx.coroutines.tasks.await
+import com.example.frogdetection.dao.LocationCacheDao
+import com.example.frogdetection.data.CapturedFrogDatabase
+import com.example.frogdetection.model.LocationCache
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.*
 
 suspend fun getReadableLocation(
     context: Context,
     latitude: Double?,
-    longitude: Double?,
-    placesClient: PlacesClient? = null
-): String {
+    longitude: Double?
+): String = withContext(Dispatchers.IO) {
     if (latitude == null || longitude == null || (latitude == 0.0 && longitude == 0.0)) {
-        return "Unknown Location"
+        return@withContext "Unknown Location"
     }
 
-    // ✅ Prefer Geocoder (Barangay → Municipality → Province → Country)
-    try {
-        val geocoder = Geocoder(context, Locale.getDefault())
-        val addresses = geocoder.getFromLocation(latitude, longitude, 1)
-        if (!addresses.isNullOrEmpty()) {
-            val addr = addresses[0]
+    val db = CapturedFrogDatabase.getDatabase(context)
+    val cacheDao: LocationCacheDao = db.locationCacheDao()
 
-            val building = addr.featureName ?: ""       // May contain landmark/POI
-            val barangay = addr.subLocality ?: ""       // Barangay
-            val municipality = addr.locality ?: addr.subAdminArea ?: "" // City/Municipality
-            val province = addr.adminArea ?: ""         // Province
-            val country = addr.countryName ?: ""        // Country
+    // Use rounded coordinates as cache key
+    val cacheKey = "%.4f,%.4f".format(latitude, longitude)
 
-            return listOf(building, barangay, municipality, province, country)
+    // ✅ 1. Try cached value first
+    cacheDao.getCachedLocation(cacheKey)?.let {
+        Log.d("getReadableLocation", "Cache hit for $cacheKey → $it")
+        return@withContext it
+    }
+
+    Log.d("getReadableLocation", "Cache miss for $cacheKey → calling OpenCage API")
+
+    // ✅ 2. Call OpenCage API if not cached
+    val apiKey = "35ee311961ed494da02b3ba387e2f3c2" // Replace this
+    val url =
+        "https://api.opencagedata.com/geocode/v1/json?q=$latitude+$longitude&key=$apiKey&language=en&pretty=1"
+
+    return@withContext try {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 8000
+        connection.readTimeout = 8000
+
+        val response = connection.inputStream.bufferedReader().use { it.readText() }
+        val json = JSONObject(response)
+
+        val results = json.optJSONArray("results")
+        var locationName = "Lat: %.4f, Lon: %.4f".format(latitude, longitude)
+
+        if (results != null && results.length() > 0) {
+            val components = results.getJSONObject(0).getJSONObject("components")
+
+            val barangay = components.optString("suburb", "")
+            val village = components.optString("village", "")
+            val city = components.optString("city", "")
+            val municipality = components.optString("town", "")
+            val province = components.optString("state", "")
+            val country = components.optString("country", "")
+
+            val parts = listOf(barangay, village, city, municipality, province, country)
                 .filter { it.isNotBlank() }
-                .joinToString(", ")
-        }
-    } catch (e: Exception) {
-        Log.e("getReadableLocation", "Geocoder failed: ${e.message}")
-    }
 
-    // ✅ Fallback: Google Places API
-    if (placesClient != null) {
-        try {
-            val placeFields = listOf(
-                Place.Field.NAME,       // POI/Building
-                Place.Field.ADDRESS     // Full formatted address
-            )
-            val request = FetchPlaceRequest.newInstance(
-                "$latitude,$longitude", placeFields
-            )
-
-            val response = placesClient.fetchPlace(request).await()
-            val place = response.place
-
-            val building = place.name ?: ""
-            val address = place.address ?: ""
-
-            return if (building.isNotBlank()) {
-                "$building, $address"
-            } else {
-                address
+            if (parts.isNotEmpty()) {
+                locationName = parts.joinToString(", ")
             }
-        } catch (e: Exception) {
-            Log.w("getReadableLocation", "Google Places failed: ${e.message}")
         }
-    }
 
-    // ✅ Final fallback
-    return "Lat: %.4f, Lon: %.4f".format(latitude, longitude)
+        // ✅ 3. Save to cache
+        cacheDao.insert(LocationCache(cacheKey = cacheKey, locationName = locationName))
+        Log.d("getReadableLocation", "Cached location for $cacheKey → $locationName")
+
+        locationName
+    } catch (e: Exception) {
+        Log.e("getReadableLocation", "OpenCage error: ${e.message}")
+        "Lat: %.4f, Lon: %.4f".format(latitude, longitude)
+    }
 }
