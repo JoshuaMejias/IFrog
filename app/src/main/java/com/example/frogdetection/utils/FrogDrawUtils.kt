@@ -5,91 +5,74 @@ import kotlin.math.max
 import kotlin.math.min
 
 object FrogDrawUtils {
-
     /**
-     * Draw detection results onto a bitmap.
-     *
-     * @param bitmap Original image
-     * @param detections List of FrogDetectionResult
-     * @return A new bitmap with bounding boxes and labels drawn
+     * Draw detection results onto a bitmap and return a mutable annotated copy.
      */
-    fun drawDetections(
-        bitmap: Bitmap,
-        detections: List<FrogDetectionResult>
-    ): Bitmap {
-        if (detections.isEmpty()) return bitmap
+    fun drawDetections(bitmap: Bitmap, detections: List<FrogDetectionResult>): Bitmap {
+        val out = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(out)
 
-        // Create mutable copy for drawing
-        val mutableBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        val canvas = Canvas(mutableBitmap)
+        val baseScale = bitmap.width / 640f.coerceAtLeast(1f)
 
-        // Set up Paint for boxes and labels
         val boxPaint = Paint().apply {
             style = Paint.Style.STROKE
-            strokeWidth = 5f
+            strokeWidth = 4f * baseScale
             isAntiAlias = true
         }
 
         val textPaint = Paint().apply {
             color = Color.WHITE
-            textSize = 36f
+            textSize = 30f * baseScale
             isAntiAlias = true
             typeface = Typeface.create(Typeface.DEFAULT_BOLD, Typeface.BOLD)
-            setShadowLayer(4f, 2f, 2f, Color.BLACK)
+            setShadowLayer(4f * baseScale, 2f * baseScale, 2f * baseScale, Color.BLACK)
         }
 
-        val backgroundPaint = Paint().apply {
-            color = Color.argb(150, 0, 0, 0)
+        val bgPaint = Paint().apply {
+            color = Color.argb(160, 0, 0, 0)
             style = Paint.Style.FILL
             isAntiAlias = true
         }
 
-        // Draw each detection
-        for (det in detections) {
-            val box = det.boundingBox
-            val conf = det.score
-            val label = det.label
+        for (d in detections) {
+            val box = d.box
+            val conf = d.score
+            val label = d.label
 
-            // 🟩 Adjust color based on confidence
-            val color = when {
-                conf >= 0.85f -> Color.rgb(0, 255, 0)     // Bright green
-                conf >= 0.6f -> Color.rgb(255, 255, 0)    // Yellow
-                else -> Color.rgb(255, 0, 0)              // Red
+            // color by confidence
+            boxPaint.color = when {
+                conf >= 0.85f -> Color.rgb(0, 200, 0)
+                conf >= 0.7f -> Color.rgb(255, 200, 0)
+                else -> Color.rgb(255, 0, 0)
             }
-            boxPaint.color = color
-            boxPaint.strokeWidth = 3f + (conf * 6f)
+            boxPaint.strokeWidth = (4f + conf * 6f) * baseScale
 
-            // 🧭 Clamp box within image bounds
+            // clamp within image
             val left = max(0f, box.left)
             val top = max(0f, box.top)
             val right = min(bitmap.width.toFloat(), box.right)
             val bottom = min(bitmap.height.toFloat(), box.bottom)
 
-            val rect = RectF(left, top, right, bottom)
+            val rectF = RectF(left, top, right, bottom)
+            canvas.drawRect(rectF, boxPaint)
 
-            // 🟩 Draw bounding box
-            canvas.drawRect(rect, boxPaint)
+            val caption = "$label ${(conf * 100).toInt()}%"
+            val tw = textPaint.measureText(caption)
+            val th = textPaint.textSize
 
-            // 🏷️ Draw label background + text
-            val text = "${label} ${(conf * 100).toInt()}%"
-            val textWidth = textPaint.measureText(text)
-            val textHeight = textPaint.textSize
+            val padding = 8f * baseScale
+            var tagTop = top - (th + padding * 2)
+            var tagBottom = top
+            if (tagTop < 0f) {
+                tagTop = top
+                tagBottom = top + (th + padding * 2)
+            }
+            val tagRect = RectF(left, tagTop, left + tw + padding * 2, tagBottom)
+            canvas.drawRoundRect(tagRect, 8f * baseScale, 8f * baseScale, bgPaint)
 
-            val padding = 8f
-            val bgRect = RectF(
-                left,
-                top - textHeight - padding * 2,
-                left + textWidth + padding * 2,
-                top
-            )
-
-            // Draw semi-transparent background for readability
-            canvas.drawRoundRect(bgRect, 8f, 8f, backgroundPaint)
-
-            // Draw label text
-            canvas.drawText(text, left + padding, top - padding, textPaint)
+            // draw text
+            canvas.drawText(caption, tagRect.left + padding, tagRect.bottom - padding - 4f * baseScale, textPaint)
         }
-
-        return mutableBitmap
+        return out
     }
 }

@@ -85,7 +85,8 @@ dependencies {
 //    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
 //    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
 
-    implementation ("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.0")
+
 
 
 

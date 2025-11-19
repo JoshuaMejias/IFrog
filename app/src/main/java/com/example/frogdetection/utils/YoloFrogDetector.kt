@@ -103,7 +103,7 @@ object YoloFrogDetector {
                         FrogDetectionResult(
                             label = "frog_${cls.toInt()}",
                             score = conf,
-                            boundingBox = RectF(x1, y1, x2, y2)
+                            box = RectF(x1, y1, x2, y2)
                         )
                     )
                 }
@@ -139,7 +139,7 @@ object YoloFrogDetector {
         }
 
         detections.forEach { det ->
-            val rect = det.boundingBox
+            val rect = det.box
             val labelText = "${det.label} ${(det.score * 100).toInt()}%"
             val textWidth = textPaint.measureText(labelText)
             val textPadding = 8f

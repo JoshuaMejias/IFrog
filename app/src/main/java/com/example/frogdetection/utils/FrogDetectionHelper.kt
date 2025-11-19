@@ -1,4 +1,3 @@
-// File: com/example/frogdetection/utils/FrogDetectionHelper.kt
 package com.example.frogdetection.utils
 
 import android.content.Context
@@ -7,291 +6,277 @@ import android.util.Log
 import ai.onnxruntime.*
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
 import java.nio.FloatBuffer
 import kotlin.math.*
+import android.graphics.RectF
 
 data class FrogDetectionResult(
     val label: String,
     val score: Float,
-    val boundingBox: RectF
+    val box: RectF
 )
-
+/**
+ * Final YOLO11 Android Inference Helper (ONNX Runtime 1.17.0)
+ */
 object FrogDetectionHelper {
 
     private const val TAG = "🐸FrogDetection"
-    private const val MODEL_ASSET = "best.onnx"
-    private const val LABELS_ASSET = "labels.txt"
-    private const val INPUT_SIZE = 640
-    private const val CONF_THRESHOLD = 0.25f
-    private const val NMS_IOU = 0.45f
-    private const val MAX_DETECTIONS = 5
+    private const val SIZE = 640
+    private const val NUM_CLASSES = 6
+    private const val CONF_THRES = 0.40f
+    private const val IOU_THRES = 0.50f
+    private const val MAX_RESULTS = 50
 
-    private var env: OrtEnvironment? = null
-    private var session: OrtSession? = null
-    private var labels: List<String> = emptyList()
+    // Labels
+    private val LABELS = arrayOf(
+        "Asian Painted Frog",
+        "Cane Toad",
+        "Common Southeast Asian Tree Frog",
+        "East Asian Bullfrog",
+        "Paddy Field Frog",
+        "Wood Frog"
+    )
 
-    // ---------------- Initialization ----------------
-    @Synchronized
-    private fun ensureInitialized(context: Context) {
-        if (session != null) return
+    // ORT objects
+    private lateinit var env: OrtEnvironment
+    private lateinit var session: OrtSession
+
+    // Grid + stride arrays
+    private lateinit var grid: Array<FloatArray>
+    private lateinit var strideMap: FloatArray
+
+    private var initialized = false
+
+    // ----------------------------------------------------
+    // INIT
+    // ----------------------------------------------------
+    fun init(context: Context) {
+        if (initialized) return
+        initialized = true
 
         env = OrtEnvironment.getEnvironment()
+        val opts = createSessionOptions()
 
-        val outFile = File(context.filesDir, MODEL_ASSET)
-        if (!outFile.exists()) {
-            context.assets.open(MODEL_ASSET).use { input ->
-                FileOutputStream(outFile).use { fos ->
-                    val buf = ByteArray(4096)
-                    var n = input.read(buf)
-                    while (n > 0) {
-                        fos.write(buf, 0, n)
-                        n = input.read(buf)
-                    }
+        // Copy ONNX model from assets → internal storage
+        val modelFile = loadModel(context, "frog_yolo11_detect_simplified.onnx")
+
+        session = env.createSession(modelFile.absolutePath, opts)
+        Log.d(TAG, "✅ ONNX session created")
+
+        val (g, s) = buildGrid()
+        grid = g
+        strideMap = s
+
+        Log.d(TAG, "📦 Grid cells=${grid.size}")
+    }
+
+    private fun loadModel(context: Context, name: String): File {
+        val out = File(context.filesDir, name)
+        if (!out.exists()) {
+            context.assets.open(name).use { input ->
+                FileOutputStream(out).use { output -> input.copyTo(output) }
+            }
+        }
+        Log.d(TAG, "Model copied: ${out.absolutePath}")
+        return out
+    }
+
+    private fun createSessionOptions(): OrtSession.SessionOptions {
+        val opts = OrtSession.SessionOptions()
+
+        // CPU Execution Provider (default)
+        try {
+            opts.addCPU(true) // true = use arena allocator
+        } catch (e: Exception) {
+            Log.w(TAG, "CPU EP add failed: ${e.message}")
+        }
+
+        // Optional: set thread counts
+        opts.setIntraOpNumThreads(1)
+        opts.setInterOpNumThreads(1)
+
+        // Optional: tune performance
+        opts.addConfigEntry("session.intra_op_thread_affinities", "0")
+
+        Log.d(TAG, "ORT 1.17.0 CPU session created")
+        return opts
+    }
+
+
+    // ----------------------------------------------------
+    // BUILD YOLO11 GRID + STRIDES
+    // ----------------------------------------------------
+    private fun buildGrid(): Pair<Array<FloatArray>, FloatArray> {
+        val list = ArrayList<FloatArray>()
+        val strideList = ArrayList<Float>()
+
+        val STRIDES = intArrayOf(8, 16, 32)
+
+        for (s in STRIDES) {
+            val fm = SIZE / s
+            for (y in 0 until fm) {
+                for (x in 0 until fm) {
+                    list.add(floatArrayOf(x.toFloat(), y.toFloat()))
+                    strideList.add(s.toFloat())
                 }
             }
         }
-        Log.d(TAG, "✅ Model file ready: ${outFile.absolutePath} (size=${outFile.length()})")
 
-        val opts = OrtSession.SessionOptions()
-        try {
-            opts.addNnapi()
-            Log.d(TAG, "✅ NNAPI delegate enabled")
-        } catch (_: Exception) {
-            try {
-                opts.addXnnpack(emptyMap())
-                Log.d(TAG, "✅ XNNPACK delegate enabled")
-            } catch (_: Exception) {
-                Log.d(TAG, "⚠ Falling back to CPU")
-            }
-        }
-
-        session = env!!.createSession(outFile.absolutePath, opts)
-        labels = loadLabels(context)
-        Log.d(TAG, "✅ ONNX session ready. Labels (${labels.size})")
+        return Pair(list.toTypedArray(), strideList.toFloatArray())
     }
 
-    private fun loadLabels(context: Context): List<String> {
-        return try {
-            context.assets.open(LABELS_ASSET)
-                .bufferedReader()
-                .readLines()
-                .filter { it.isNotBlank() }
-        } catch (_: Exception) {
-            Log.w(TAG, "⚠ labels.txt not found; using fallback labels")
-            listOf(
-                "Asian Painted Frog",
-                "Cane Toad",
-                "Common Southeast Asian Tree Frog",
-                "East Asian Bullfrog",
-                "Paddy Field Frog",
-                "Wood Frog"
-            )
-        }
-    }
-
-    // ---------------- Preprocessing ----------------
-    private data class LetterboxResult(
+    // ----------------------------------------------------
+    // PREPROCESS (LETTERBOX)
+    // ----------------------------------------------------
+    private data class Prep(
         val tensor: OnnxTensor,
         val scale: Float,
         val padX: Float,
         val padY: Float
     )
 
-    private fun makeLetterboxTensor(bmp: Bitmap): LetterboxResult {
-        val w = bmp.width
-        val h = bmp.height
-        val scale = min(INPUT_SIZE.toFloat() / w, INPUT_SIZE.toFloat() / h)
+    private fun preprocess(img: Bitmap): Prep {
+        val w = img.width
+        val h = img.height
 
-        val nw = (w * scale).roundToInt()
-        val nh = (h * scale).roundToInt()
+        val scale = min(SIZE / w.toFloat(), SIZE / h.toFloat())
+        val newW = (w * scale).roundToInt()
+        val newH = (h * scale).roundToInt()
 
-        val resized = Bitmap.createScaledBitmap(bmp, nw, nh, true)
-        val padded = Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888)
-
-        val padX = ((INPUT_SIZE - nw) / 2f)
-        val padY = ((INPUT_SIZE - nh) / 2f)
+        val resized = Bitmap.createScaledBitmap(img, newW, newH, true)
+        val padded = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
 
         val canvas = Canvas(padded)
         canvas.drawColor(Color.rgb(114, 114, 114))
+        val padX = (SIZE - newW) / 2f
+        val padY = (SIZE - newH) / 2f
         canvas.drawBitmap(resized, padX, padY, null)
 
-        val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
-        padded.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
+        val pixels = IntArray(SIZE * SIZE)
+        padded.getPixels(pixels, 0, SIZE, 0, 0, SIZE, SIZE)
 
-        val floatArr = FloatArray(3 * pixels.size)
-        val plane = pixels.size
+        val fb = FloatBuffer.allocate(1 * 3 * SIZE * SIZE)
+        val area = SIZE * SIZE
 
-        for (i in pixels.indices) {
-            val p = pixels[i]
-            floatArr[i] = ((p shr 16) and 0xFF) / 255f
-            floatArr[i + plane] = ((p shr 8) and 0xFF) / 255f
-            floatArr[i + 2 * plane] = (p and 0xFF) / 255f
-        }
+        // R Channel
+        for (i in 0 until area) fb.put(((pixels[i] shr 16) and 0xFF) / 255f)
+        // G Channel
+        for (i in 0 until area) fb.put(((pixels[i] shr 8) and 0xFF) / 255f)
+        // B Channel
+        for (i in 0 until area) fb.put((pixels[i] and 0xFF) / 255f)
 
-        val buffer = FloatBuffer.wrap(floatArr)
-        val tensor = OnnxTensor.createTensor(env, buffer, longArrayOf(1, 3, INPUT_SIZE.toLong(), INPUT_SIZE.toLong()))
-        return LetterboxResult(tensor, scale, padX, padY)
+        fb.rewind()
+        val tensor = OnnxTensor.createTensor(env, fb, longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong()))
+        return Prep(tensor, scale, padX, padY)
     }
 
-    // ---------------- Utilities ----------------
-    private fun anyArrayLength(o: Any?): Int {
-        if (o == null) return -1
-        return try { java.lang.reflect.Array.getLength(o) } catch (_: Exception) { -1 }
-    }
+    private fun sigmoid(x: Float) = (1f / (1f + exp(-x)))
 
-    private fun iou(a: RectF, b: RectF): Float {
-        val left = max(a.left, b.left)
-        val top = max(a.top, b.top)
-        val right = min(a.right, b.right)
-        val bottom = min(a.bottom, b.bottom)
+    // ----------------------------------------------------
+    // MAIN DETECTION
+    // ----------------------------------------------------
+    fun detectFrogs(img: Bitmap): List<FrogDetectionResult> {
+        if (!initialized) throw IllegalStateException("FrogDetectionHelper.init() not called!")
 
-        val w = max(0f, right - left)
-        val h = max(0f, bottom - top)
-        val inter = w * h
-        val union = a.width() * a.height() + b.width() * b.height() - inter
-        return if (union <= 0) 0f else inter / union
-    }
+        val prep = preprocess(img)
+        val inputName = session.inputNames.first()
 
-    private fun nms(boxes: List<RectF>, scores: List<Float>, classes: List<Int>): List<Int> {
-        val order = scores.indices.sortedByDescending { scores[it] }.toMutableList()
-        val keep = mutableListOf<Int>()
+        val outputs = session.run(mapOf(inputName to prep.tensor))
+        prep.tensor.close()
 
-        while (order.isNotEmpty()) {
-            val i = order.removeAt(0)
-            keep.add(i)
-            order.removeAll { j ->
-                classes[i] == classes[j] && iou(boxes[i], boxes[j]) > NMS_IOU
-            }
-        }
-        return keep.take(MAX_DETECTIONS)
-    }
+        val raw = (outputs[0].value as Array<Array<FloatArray>>)[0]  // [C, N]
+        outputs.close()
 
-    // ---------------- Raw YOLO Parser ----------------
-    private fun parseYOLORaw(
-        preds: Array<FloatArray>,
-        scale: Float,
-        padX: Float,
-        padY: Float,
-        origW: Int,
-        origH: Int
-    ): List<FrogDetectionResult> {
+        val C = raw.size       // 10 channels
+        val N = raw[0].size    // 8400 cells
 
-        fun sigmoid(x: Float) = 1f / (1f + exp(-x))
+        val results = ArrayList<FrogDetectionResult>()
 
-        val boxes = mutableListOf<RectF>()
-        val scores = mutableListOf<Float>()
-        val classes = mutableListOf<Int>()
+        for (i in 0 until N) {
 
-        val numCols = preds[0].size
-        val numClasses = numCols - 5
+            val cx = raw[0][i]
+            val cy = raw[1][i]
+            val w = raw[2][i]
+            val h = raw[3][i]
 
-        for ((index, det) in preds.withIndex()) {
+            val obj = sigmoid(raw[4][i])
+            if (obj < 0.1f) continue
 
-            // DEBUG raw values periodically
-            if (index % 500 == 0) {
-                Log.d(TAG, "Pred[$index]: raw=" + det.joinToString(", ") { "%.3f".format(it) })
+            var bestClass = 0
+            var bestProb = 0f
+
+            for (c in 0 until NUM_CLASSES) {
+                val p = sigmoid(raw[5 + c][i])
+                if (p > bestProb) {
+                    bestProb = p
+                    bestClass = c
+                }
             }
 
-            val cx = det[0]  // absolute pixel coords already
-            val cy = det[1]
-            val w = det[2]
-            val h = det[3]
+            val score = obj * bestProb
+            if (score < CONF_THRES) continue
 
-            val obj = sigmoid(det[4])
+            val g = grid[i]
+            val s = strideMap[i]
 
-            val clsScores = FloatArray(numClasses) { i -> sigmoid(det[5 + i]) }
-            val (clsIdx, clsConf) = clsScores.withIndex().maxByOrNull { it.value } ?: continue
+            val bx = (sigmoid(cx) * 2 - 0.5f + g[0]) * s
+            val by = (sigmoid(cy) * 2 - 0.5f + g[1]) * s
+            val bw = (sigmoid(w) * 2).pow(2) * s
+            val bh = (sigmoid(h) * 2).pow(2) * s
 
-            val score = obj * clsConf
+            val x1 = bx - bw / 2
+            val y1 = by - bh / 2
+            val x2 = bx + bw / 2
+            val y2 = by + bh / 2
 
-            // DEBUG score pipeline
-            Log.d(TAG, "Score=%.4f obj=%.4f cls=%.4f clsIdx=%d".format(score, obj, clsConf, clsIdx))
+            val rx1 = (x1 - prep.padX) / prep.scale
+            val ry1 = (y1 - prep.padY) / prep.scale
+            val rx2 = (x2 - prep.padX) / prep.scale
+            val ry2 = (y2 - prep.padY) / prep.scale
 
-            if (score < CONF_THRESHOLD) continue
-
-            val left = ((cx - w / 2f) - padX) / scale
-            val top = ((cy - h / 2f) - padY) / scale
-            val right = ((cx + w / 2f) - padX) / scale
-            val bottom = ((cy + h / 2f) - padY) / scale
-
-            // DEBUG bbox
-            Log.d(TAG, "BBox: L=%.1f T=%.1f R=%.1f B=%.1f".format(left, top, right, bottom))
-
-            boxes.add(RectF(left, top, right, bottom))
-            scores.add(score)
-            classes.add(clsIdx)
-        }
-
-        if (boxes.isEmpty()) return emptyList()
-
-        val keep = nms(boxes, scores, classes)
-        return keep.map { i ->
-            FrogDetectionResult(
-                labels.getOrNull(classes[i]) ?: "Unknown",
-                scores[i],
-                boxes[i]
+            results.add(
+                FrogDetectionResult(
+                    label = LABELS[bestClass],
+                    score = score,
+                    box = RectF(rx1, ry1, rx2, ry2)
+                )
             )
         }
+
+        return nms(results)
     }
 
-    // ---------------- Detection Entry ----------------
-    fun detectFrogs(context: Context, bitmap: Bitmap): List<FrogDetectionResult> {
-        ensureInitialized(context)
-        val sess = session ?: return emptyList()
+    // ----------------------------------------------------
+    // NMS
+    // ----------------------------------------------------
+    private fun iou(a: RectF, b: RectF): Float {
+        val x1 = max(a.left, b.left)
+        val y1 = max(a.top, b.top)
+        val x2 = min(a.right, b.right)
+        val y2 = min(a.bottom, b.bottom)
 
-        val prep = makeLetterboxTensor(bitmap)
+        val w = max(0f, x2 - x1)
+        val h = max(0f, y2 - y1)
+        val inter = w * h
+        val union = a.width() * a.height() + b.width() * b.height() - inter
+        return if (union <= 0f) 0f else inter / union
+    }
 
-        return try {
-            val inputName = sess.inputNames.first()
-            sess.run(mapOf(inputName to prep.tensor)).use { results ->
-                if (results.size() == 0) return emptyList()
+    private fun nms(src: List<FrogDetectionResult>): List<FrogDetectionResult> {
+        val sorted = src.sortedByDescending { it.score }.toMutableList()
+        val keep = ArrayList<FrogDetectionResult>()
 
-                val out = results[0].value
-                Log.d(TAG, "ℹ️ Output runtime type: ${out?.javaClass}")
+        while (sorted.isNotEmpty() && keep.size < MAX_RESULTS) {
+            val best = sorted.removeAt(0)
+            keep.add(best)
 
-                val d0 = anyArrayLength(out)
-                val d1 = anyArrayLength(java.lang.reflect.Array.get(out, 0))
-                val d2 = anyArrayLength(java.lang.reflect.Array.get(java.lang.reflect.Array.get(out, 0), 0))
-
-                Log.d(TAG, "ℹ️ Output shape (3D): $d0 x $d1 x $d2")
-
-                // Expect raw YOLO: [1,10,8400]
-                if (d0 == 1 && d1 == 10 && d2 > 0) {
-                    val transposed = Array(d2) { FloatArray(d1) }
-                    for (i in 0 until d1) {
-                        val row = java.lang.reflect.Array.get(out, 0)
-                        val inner = java.lang.reflect.Array.get(row, i)
-                        for (j in 0 until d2) {
-                            transposed[j][i] = java.lang.reflect.Array.getFloat(inner, j)
-                        }
-                    }
-
-                    Log.d(TAG, "ℹ️ Transposed preds shape: ${transposed.size} x ${transposed[0].size}")
-
-                    // DEBUG first row
-                    val sample = transposed[0]
-
-                    Log.e(TAG, "FIRST RAW ROW (0): " + sample.joinToString(", ") )
-
-
-                    return parseYOLORaw(
-                        transposed,
-                        prep.scale,
-                        prep.padX,
-                        prep.padY,
-                        bitmap.width,
-                        bitmap.height
-                    )
-                }
-
-                emptyList()
+            val it = sorted.iterator()
+            while (it.hasNext()) {
+                val other = it.next()
+                if (iou(best.box, other.box) > IOU_THRES) it.remove()
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Detection failed: ${e.message}", e)
-            emptyList()
-        } finally {
-            prep.tensor.close()
         }
+
+        return keep
     }
 }
