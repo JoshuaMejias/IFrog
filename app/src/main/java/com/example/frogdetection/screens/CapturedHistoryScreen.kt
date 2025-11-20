@@ -36,7 +36,7 @@ fun CapturedHistoryScreen(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        // ✅ Header
+        // Header
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
@@ -90,9 +90,10 @@ fun CapturedFrogItem(
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
     var resolvedLocation by remember { mutableStateOf(frog.locationName) }
 
-    // ✅ Auto-fetch readable name from OpenCage if missing
+    // Automatically fetch location name if missing
     LaunchedEffect(frog.id) {
         if (resolvedLocation.isNullOrBlank() &&
             frog.latitude != null && frog.longitude != null &&
@@ -104,16 +105,19 @@ fun CapturedFrogItem(
                 longitude = frog.longitude,
                 apiKey = context.getString(R.string.opencage_api_key)
             )
+
             if (readable.isNotBlank()) {
                 resolvedLocation = readable
+
+                // ✅ FIXED: Correct DB update instead of "insert"
                 scope.launch {
-                    // ✅ Update in DB (caches automatically)
-                    viewModel.insert(frog.copy(locationName = readable))
+                    viewModel.updateLocation(frog.id, readable)
                 }
             }
         }
     }
 
+    // Delete confirmation dialog
     if (showDialog) {
         AlertDialog(
             onDismissRequest = { showDialog = false },
@@ -138,6 +142,7 @@ fun CapturedFrogItem(
         )
     }
 
+    // Main item card
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -161,6 +166,7 @@ fun CapturedFrogItem(
                     contentDescription = frog.speciesName,
                     modifier = Modifier.size(80.dp)
                 )
+
                 Column {
                     Text(frog.speciesName, style = MaterialTheme.typography.titleMedium)
                     Text(

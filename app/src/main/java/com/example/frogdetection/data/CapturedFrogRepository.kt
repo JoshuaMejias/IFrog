@@ -6,12 +6,15 @@ import kotlinx.coroutines.flow.Flow
 
 class CapturedFrogRepository(private val dao: CapturedFrogDao) {
 
-    // ✅ Insert or update automatically
     suspend fun insert(frog: CapturedFrog): Long = dao.insert(frog)
 
-    fun getAllFrogs(): Flow<List<CapturedFrog>> = dao.getAllFrogs()
+    fun getAllFrogs() = dao.getAllFrogs()
 
-    suspend fun getFrogById(id: Int): CapturedFrog? = dao.getFrogById(id)
+    suspend fun getFrogById(id: Int) = dao.getFrogById(id)
 
     suspend fun delete(frog: CapturedFrog) = dao.delete(frog)
+
+    // NEW
+    suspend fun updateLocation(id: Int, name: String) = dao.updateLocation(id, name)
 }
+

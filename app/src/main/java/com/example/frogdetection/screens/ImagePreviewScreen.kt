@@ -1,11 +1,11 @@
-// File: com/example/frogdetection/screens/ImagePreviewScreen.kt
 package com.example.frogdetection.screens
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.RectF
+import android.graphics.Matrix
+//import android.media.ExifInterface
 import android.net.Uri
-import android.util.Log
+import android.provider.MediaStore
+import androidx.exifinterface.media.ExifInterface
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -15,322 +15,163 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color as ComposeColor
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalDensity
 import androidx.navigation.NavController
 import coil.compose.rememberAsyncImagePainter
-import com.example.frogdetection.R
-import com.example.frogdetection.data.CapturedFrogDatabase
 import com.example.frogdetection.model.CapturedFrog
 import com.example.frogdetection.utils.FrogDetectionHelper
-import com.example.frogdetection.utils.FrogDetectionResult
-import com.example.frogdetection.utils.getReadableLocation
-import kotlinx.coroutines.*
-import kotlin.math.max
-import kotlin.math.min
-import androidx.compose.ui.graphics.nativeCanvas
+import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
+import java.util.*
 
+// --------------------------------------------------
+// FIXED: load bitmap with EXIF orientation corrected
+// --------------------------------------------------
+fun loadCorrectedBitmap(context: android.content.Context, uri: Uri): Bitmap {
+    val bitmap = MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
 
-@OptIn(ExperimentalMaterial3Api::class)
+    // Read EXIF orientation
+    val input = context.contentResolver.openInputStream(uri)
+    val exif = ExifInterface(input!!)
+    val rotation = when (
+        exif.getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL
+        )
+    ) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> 90
+        ExifInterface.ORIENTATION_ROTATE_180 -> 180
+        ExifInterface.ORIENTATION_ROTATE_270 -> 270
+        else -> 0
+    }
+    input.close()
+
+    // Apply rotation
+    val rotatedBitmap = if (rotation != 0) {
+        val matrix = Matrix()
+        matrix.postRotate(rotation.toFloat())
+        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    } else bitmap
+
+    // ONNX must receive ARGB_8888
+    return rotatedBitmap.copy(Bitmap.Config.ARGB_8888, true)
+}
+
+// --------------------------------------------------
+// MAIN SCREEN
+// --------------------------------------------------
 @Composable
 fun ImagePreviewScreen(
     navController: NavController,
     imageUri: String?,
     latitude: Double?,
-    longitude: Double?
+    longitude: Double?,
+    viewModel: CapturedHistoryViewModel
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
 
-    var resolvedLocation by remember { mutableStateOf<String?>(null) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var detections by remember { mutableStateOf<List<FrogDetectionResult>>(emptyList()) }
-    var detectedSpecies by remember { mutableStateOf("Unknown Species") }
-    var inferenceMs by remember { mutableStateOf(0.0) }
-    var displaySize by remember { mutableStateOf(IntSize(0, 0)) }
-    var loading by remember { mutableStateOf(false) }
-    var statusText by remember { mutableStateOf<String?> (null) }
+    var detectedSpecies by remember { mutableStateOf("Detecting...") }
+    var detectionDone by remember { mutableStateOf(false) }
 
-    // Reverse-geocode if available
-    LaunchedEffect(latitude, longitude) {
-        if (latitude != null && longitude != null && latitude != 0.0 && longitude != 0.0) {
-            try {
-                resolvedLocation = getReadableLocation(context, latitude, longitude)
-            } catch (e: Exception) {
-                Log.w("ImagePreview", "Reverse geocode failed: ${e.message}")
-            }
-        }
-    }
-
-    // Load image once and run detection
+    // Load + fix EXIF rotation
     LaunchedEffect(imageUri) {
-        if (imageUri == null) {
-            statusText = "No image supplied"
-            return@LaunchedEffect
-        }
-
-        // Avoid re-running if bitmap already loaded
-        if (bitmap != null) return@LaunchedEffect
-
-        loading = true
-        statusText = "Loading image..."
-        withContext(Dispatchers.IO) {
-            try {
-                context.contentResolver.openInputStream(Uri.parse(imageUri)).use { stream ->
-                    if (stream == null) throw Exception("Unable to open image stream")
-                    val bmp = BitmapFactory.decodeStream(stream)
-                        ?: throw Exception("Bitmap decode failed")
-                    bitmap = bmp
-                }
-
-                val results = withContext(Dispatchers.IO) {
-                    try {
-                        FrogDetectionHelper.detectFrogs(bitmap!!)
-                    } catch (e: Exception) {
-                        Log.e("ImagePreview", "detectFrogs error", e)
-                        emptyList<FrogDetectionResult>()
-                    }
-                }
-
-                // update UI state on main thread
-                withContext(Dispatchers.Main) {
-                    detections = results
-                    val best = results.maxByOrNull { it.score }
-                    detectedSpecies = if (best != null && best.score >= 0.35f) best.label else "Unknown Species"
-                    statusText = "Done"
-                }
-            } catch (e: Exception) {
-                Log.e("ImagePreview", "Image load/detect failed", e)
-                withContext(Dispatchers.Main) {
-                    statusText = "Failed: ${e.message ?: "error"}"
-                    detections = emptyList()
-                    detectedSpecies = "Detection failed"
-                }
-            } finally {
-                loading = false
-            }
+        imageUri?.let {
+            val uri = Uri.parse(it)
+            bitmap = loadCorrectedBitmap(context, uri)
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("Image Preview") })
+    // Run YOLO detection ONCE
+    LaunchedEffect(bitmap) {
+        bitmap?.let {
+            FrogDetectionHelper.init(context) // ensure ONNX loaded
+            val results = FrogDetectionHelper.detectFrogs(it)
+            detectedSpecies = results.firstOrNull()?.label ?: "Unknown"
+            detectionDone = true
         }
-    ) { padding ->
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFE8F5E9)),
+        contentAlignment = Alignment.Center
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(12.dp),
+                .fillMaxWidth()
+                .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-
-            Icon(
-                painter = rememberAsyncImagePainter(model = R.drawable.ifrog_logo),
-                contentDescription = "iFrog Logo",
-                modifier = Modifier
-                    .size(96.dp)
-                    .padding(bottom = 8.dp),
-                tint = ComposeColor.Unspecified
-            )
-
-            Text(
-                text = "Preview & Detect",
-                style = MaterialTheme.typography.headlineSmall,
-                color = ComposeColor(0xFF2E7D32)
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Image box
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(360.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(ComposeColor.White),
-                contentAlignment = Alignment.Center
-            ) {
-                // Painter fallback while bitmap not available
-                val painter = rememberAsyncImagePainter(model = imageUri ?: R.drawable.ic_launcher_foreground)
-
+            // IMAGE PREVIEW
+            if (imageUri != null) {
                 Image(
-                    painter = painter,
-                    contentDescription = "Previewed image",
+                    painter = rememberAsyncImagePainter(Uri.parse(imageUri)),
+                    contentDescription = "Preview",
                     modifier = Modifier
-                        .matchParentSize()
-                        .onGloballyPositioned { coords ->
-                            displaySize = coords.size
-                        },
-                    contentScale = ContentScale.Fit
-                )
-
-                // If we have a loaded bitmap, draw detection overlays
-                bitmap?.let { bmp ->
-                    // Compose Canvas overlay that maps model boxes -> displayed image coordinates
-                    androidx.compose.foundation.Canvas(modifier = Modifier.matchParentSize()) {
-                        if (displaySize.width == 0 || displaySize.height == 0) return@Canvas
-
-                        val imgW = bmp.width.toFloat()
-                        val imgH = bmp.height.toFloat()
-                        val dispW = size.width
-                        val dispH = size.height
-
-                        val scale = min(dispW / imgW, dispH / imgH)
-                        val scaledW = imgW * scale
-                        val scaledH = imgH * scale
-                        val offsetX = (dispW - scaledW) / 2f
-                        val offsetY = (dispH - scaledH) / 2f
-
-                        // Draw boxes
-                        for (d in detections) {
-                            val rect = d.box
-                            val left = rect.left * scale + offsetX
-                            val top = rect.top * scale + offsetY
-                            val right = rect.right * scale + offsetX
-                            val bottom = rect.bottom * scale + offsetY
-
-                            val conf = d.score
-                            val strokeColor = when {
-                                conf >= 0.85f -> ComposeColor(0xFF00FF00)
-                                conf >= 0.7f -> ComposeColor(0xFFFFFF00)
-                                else -> ComposeColor(0xFFFF0000)
-                            }
-                            val strokeWidth = 2f + (conf * 6f)
-
-                            drawRect(
-                                color = strokeColor,
-                                topLeft = Offset(left, top),
-                                size = Size(
-                                    width = (right - left).coerceAtLeast(1f),
-                                    height = (bottom - top).coerceAtLeast(1f)
-                                ),
-                                style = Stroke(width = strokeWidth)
-                            )
-
-                            // Draw label background + text using Android native canvas for crisp text
-                            val labelText = "${d.label} ${(d.score * 100).toInt()}%"
-                            drawContext.canvas.nativeCanvas.apply {
-                                val bgPaint = android.graphics.Paint().apply {
-                                    color = android.graphics.Color.argb(160, 0, 0, 0)
-                                    style = android.graphics.Paint.Style.FILL
-                                    isAntiAlias = true
-                                }
-                                val textPaint = android.graphics.Paint().apply {
-                                    color = android.graphics.Color.WHITE
-                                    textSize = 28f
-                                    isAntiAlias = true
-                                    typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
-                                    setShadowLayer(3f, 1f, 1f, android.graphics.Color.BLACK)
-                                }
-                                val tw = textPaint.measureText(labelText)
-                                val padding = 8f
-                                val bx = left.coerceAtLeast(0f)
-                                var by = top - (textPaint.textSize + padding * 2)
-                                if (by < 0f) by = top + padding
-                                drawRect(bx, by, bx + tw + padding * 2, by + textPaint.textSize + padding * 2, bgPaint)
-                                drawText(labelText, bx + padding, by + textPaint.textSize + padding / 2f, textPaint)
-                            }
-                        }
-                    }
-                }
-
-                if (loading) {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                }
-
-                // small status on top-left
-                Text(
-                    text = statusText ?: (if (loading) "Working..." else ""),
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(8.dp)
-                        .background(ComposeColor(0x66000000))
-                        .padding(6.dp),
-                    color = ComposeColor.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                // inference info top-right
-                Text(
-                    text = "Inference: ${"%.1f".format(inferenceMs)} ms",
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .background(ComposeColor(0x66000000))
-                        .padding(6.dp),
-                    color = ComposeColor.White,
-                    style = MaterialTheme.typography.bodySmall
+                        .size(320.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFFEEEEEE)),
+                    contentScale = ContentScale.Crop
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(Modifier.height(20.dp))
 
+            // SPECIES TEXT
             Text(
-                text = resolvedLocation ?: "Locating...",
-                style = MaterialTheme.typography.bodyMedium,
-                color = ComposeColor.DarkGray
+                text = detectedSpecies,
+                style = MaterialTheme.typography.headlineSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF2E7D32)
+                )
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(Modifier.height(30.dp))
 
-            Text(
-                text = "Detected: $detectedSpecies",
-                color = ComposeColor(0xFF2E7D32),
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Buttons row
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                Button(
-                    onClick = { navController.popBackStack() },
-                    colors = ButtonDefaults.buttonColors(containerColor = ComposeColor(0xFF90EE90))
+            // BUTTONS
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                // ❌ DISCARD
+                OutlinedButton(
+                    onClick = { navController.navigate("home") },
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFFB71C1C)
+                    )
                 ) {
-                    Text("Cancel", color = ComposeColor(0xFF004400))
+                    Text("Discard")
                 }
 
+                // ✅ SAVE RESULT
                 Button(
                     onClick = {
-                        // Save captured frog entry
                         if (imageUri != null) {
-                            coroutineScope.launch(Dispatchers.IO) {
-                                try {
-                                    val dao = CapturedFrogDatabase.getDatabase(context).capturedFrogDao()
-                                    val frog = CapturedFrog(
-                                        imageUri = imageUri,
-                                        latitude = latitude ?: 0.0,
-                                        longitude = longitude ?: 0.0,
-                                        locationName = resolvedLocation,
-                                        speciesName = detectedSpecies,
-                                        timestamp = System.currentTimeMillis()
-                                    )
-                                    val newId = dao.insert(frog)
-                                    withContext(Dispatchers.Main) {
-                                        navController.navigate("resultScreen/$newId") {
-                                            popUpTo("preview/{imageUri}/{lat}/{lon}") { inclusive = true }
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e("ImagePreview", "Save failed", e)
-                                }
+                            // Save frog in Room DB
+                            val frog = CapturedFrog(
+                                imageUri = imageUri,
+                                latitude = latitude,
+                                longitude = longitude,
+                                speciesName = detectedSpecies,
+                                timestamp = System.currentTimeMillis(),
+                                locationName = null
+                            )
+
+                            viewModel.insert(frog) { newId ->
+                                navController.navigate("resultScreen/$newId")
                             }
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ComposeColor(0xFF66BB6A))
+                    enabled = detectionDone,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF66BB6A)
+                    )
                 ) {
-                    Text("Save & Continue", color = ComposeColor.White)
+                    Text("Save", color = Color.White)
                 }
             }
         }

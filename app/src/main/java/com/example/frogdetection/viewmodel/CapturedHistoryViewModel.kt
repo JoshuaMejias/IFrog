@@ -20,7 +20,7 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
     private val repository: CapturedFrogRepository
     private val appContext = application.applicationContext
 
-    // ✅ Load OpenCage API key from strings.xml
+    // Load OpenCage API key from resources
     private val openCageApiKey = appContext.getString(R.string.opencage_api_key)
 
     init {
@@ -32,7 +32,7 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
         repository.getAllFrogs()
             .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // ✅ Insert with OpenCage Geocoding (async)
+    // Insert a new frog entry (used when saving after detection)
     fun insert(frog: CapturedFrog, onInserted: (Long) -> Unit = {}) {
         viewModelScope.launch {
             val locationName = withContext(Dispatchers.IO) {
@@ -58,22 +58,32 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
         }
     }
 
-    // ✅ Fix missing locations asynchronously
+    fun updateLocation(id: Int, name: String) {
+        viewModelScope.launch {
+            repository.updateLocation(id, name)
+        }
+    }
+
+
+    // Fix missing locations without inserting duplicates
     fun migrateMissingLocations() {
         viewModelScope.launch {
-            capturedFrogs.value.filter { it.locationName.isNullOrBlank() }.forEach { frog ->
-                val updatedLocation = withContext(Dispatchers.IO) {
-                    getReadableLocationFromOpenCage(
-                        context = appContext,
-                        latitude = frog.latitude ?: 0.0,
-                        longitude = frog.longitude ?: 0.0,
-                        apiKey = openCageApiKey
-                    )
-                }
+            capturedFrogs.value
+                .filter { it.locationName.isNullOrBlank() && it.latitude != null && it.longitude != null }
+                .forEach { frog ->
 
-                val updated = frog.copy(locationName = updatedLocation)
-                repository.insert(updated)
-            }
+                    val readable = withContext(Dispatchers.IO) {
+                        getReadableLocationFromOpenCage(
+                            context = appContext,
+                            latitude = frog.latitude ?: 0.0,
+                            longitude = frog.longitude ?: 0.0,
+                            apiKey = openCageApiKey
+                        )
+                    }
+
+                    if (readable.isNotBlank()) { repository.updateLocation(frog.id, readable) }
+
+                }
         }
     }
 }

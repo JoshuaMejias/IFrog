@@ -80,6 +80,8 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended:1.7.0")
     implementation("io.coil-kt:coil-compose:2.4.0")
     implementation("io.coil-kt:coil:2.6.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
 
 //    implementation("org.tensorflow:tensorflow-lite:2.14.0")
 //    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")

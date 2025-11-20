@@ -21,7 +21,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-
         setContent {
             iFrogTheme {
                 val navController = rememberNavController()
@@ -29,10 +28,9 @@ class MainActivity : ComponentActivity() {
                 val currentRoute = navBackStackEntry?.destination?.route
 
                 val historyViewModel: CapturedHistoryViewModel = viewModel(
-                    factory = ViewModelProvider.AndroidViewModelFactory(application)
+                    factory = ViewModelProvider.AndroidViewModelFactory.getInstance(application)
                 )
 
-                // ✅ Automatically fill in missing location names using OpenCage
                 LaunchedEffect(Unit) {
                     historyViewModel.migrateMissingLocations()
                 }
@@ -53,11 +51,16 @@ class MainActivity : ComponentActivity() {
                         composable("splash") { SplashScreen(navController) }
                         composable("welcome") { WelcomeScreen(navController) }
                         composable("home") { HomeScreen(navController) }
+
                         composable("dictionary") {
                             FrogDictionaryScreen(navController, frogs = frogList)
                         }
 
-                        composable("frogDetail/{frogName}") { backStackEntry ->
+                        composable("frogDetail/{frogName}",
+                            arguments = listOf(
+                                navArgument("frogName") { type = NavType.StringType }
+                            )
+                        ) { backStackEntry ->
                             val frogName = backStackEntry.arguments?.getString("frogName")
                             val startIndex = frogList.indexOfFirst { it.name == frogName }
                             if (startIndex != -1) {
@@ -70,16 +73,19 @@ class MainActivity : ComponentActivity() {
                         }
 
                         composable("history") {
-                            CapturedHistoryScreen(
-                                navController = navController,
-                                viewModel = historyViewModel
-                            )
+                            CapturedHistoryScreen(navController, historyViewModel)
                         }
 
-                        composable("map/{frogId}?") { backStackEntry ->
+                        // FIXED — valid route
+                        composable(
+                            route = "map/{frogId}",
+                            arguments = listOf(
+                                navArgument("frogId") { type = NavType.StringType }
+                            )
+                        ) { backStackEntry ->
                             val frogId = backStackEntry.arguments?.getString("frogId")
                             DistributionMapScreen(
-                                navController = navController,
+                                navController,
                                 viewModel = historyViewModel,
                                 focusedFrogId = frogId
                             )
@@ -87,17 +93,18 @@ class MainActivity : ComponentActivity() {
 
                         composable("about") { AboutScreen(navController) }
 
-                        // ✅ Preview now accepts lat/lon for image capture
                         composable(
-                            "preview/{imageUri}/{lat}/{lon}",
+                            route = "preview/{imageUri}/{lat}/{lon}",
                             arguments = listOf(
                                 navArgument("imageUri") { type = NavType.StringType },
                                 navArgument("lat") { type = NavType.StringType },
                                 navArgument("lon") { type = NavType.StringType }
                             )
                         ) { backStackEntry ->
+
                             val encodedUri = backStackEntry.arguments?.getString("imageUri")
                             val decodedUri = encodedUri?.let { Uri.decode(it) }
+
                             val lat = backStackEntry.arguments?.getString("lat")?.toDoubleOrNull()
                             val lon = backStackEntry.arguments?.getString("lon")?.toDoubleOrNull()
 
@@ -105,11 +112,20 @@ class MainActivity : ComponentActivity() {
                                 navController = navController,
                                 imageUri = decodedUri,
                                 latitude = lat,
-                                longitude = lon
+                                longitude = lon,
+                                viewModel = historyViewModel   // <-- FIX
                             )
+
                         }
 
-                        composable("resultScreen/{frogId}") { backStackEntry ->
+
+
+                        composable(
+                            route = "resultScreen/{frogId}",
+                            arguments = listOf(
+                                navArgument("frogId") { type = NavType.StringType }
+                            )
+                        ) { backStackEntry ->
                             val frogId = backStackEntry.arguments?.getString("frogId")?.toLongOrNull()
                             if (frogId != null) {
                                 ResultScreen(

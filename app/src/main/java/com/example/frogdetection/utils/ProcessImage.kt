@@ -11,7 +11,6 @@ fun processImage(
     lat: Double,
     lon: Double
 ) {
-    // Encode both Uri and coordinates safely
-    val encodedUri = Uri.encode(imageUri.toString())
-    navController.navigate("preview/$encodedUri/$lat/$lon")
+    val encoded = Uri.encode(imageUri.toString())
+    navController.navigate("preview/$encoded/$lat/$lon")
 }

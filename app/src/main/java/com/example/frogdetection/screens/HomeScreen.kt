@@ -25,6 +25,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import com.example.frogdetection.R
@@ -59,11 +60,16 @@ fun HomeScreen(navController: NavController) {
     // Keep Uri for camera image
     var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
-    // Camera launcher
     val cameraLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success: Boolean ->
             if (success && cameraImageUri != null) {
-                if (locationPermissionState.status.isGranted) {
+
+                val hasPermission = ActivityCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+
+                if (hasPermission) {
                     fusedLocationClient.lastLocation.addOnSuccessListener { location ->
                         val lat = location?.latitude ?: 0.0
                         val lon = location?.longitude ?: 0.0
@@ -76,11 +82,18 @@ fun HomeScreen(navController: NavController) {
             }
         }
 
+
     // Gallery launcher
     val galleryLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
             uri?.let {
-                if (locationPermissionState.status.isGranted) {
+
+                val hasPermission = ActivityCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+
+                if (hasPermission) {
                     fusedLocationClient.lastLocation.addOnSuccessListener { location ->
                         val lat = location?.latitude ?: 0.0
                         val lon = location?.longitude ?: 0.0
@@ -92,6 +105,7 @@ fun HomeScreen(navController: NavController) {
                 }
             }
         }
+
 
     // Logo animation
     val infiniteTransition = rememberInfiniteTransition()

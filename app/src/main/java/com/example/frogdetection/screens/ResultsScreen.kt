@@ -10,7 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -30,7 +30,7 @@ fun ResultScreen(
 ) {
     var frog by remember { mutableStateOf<CapturedFrog?>(null) }
 
-    // ✅ Load frog record from DB
+    // Load frog entry from DB
     LaunchedEffect(frogId) {
         frog = viewModel.getFrogById(frogId.toInt())
     }
@@ -40,106 +40,95 @@ fun ResultScreen(
             .fillMaxSize()
             .background(
                 brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                    colors = listOf(ComposeColor(0xFFE0FFE0), ComposeColor(0xFFB0FFB0))
+                    colors = listOf(Color(0xFFE0FFE0), Color(0xFFB0FFB0))
                 )
             ),
         contentAlignment = Alignment.Center
     ) {
         if (frog == null) {
-            CircularProgressIndicator(color = ComposeColor(0xFF4CAF50))
+            CircularProgressIndicator(color = Color(0xFF4CAF50))
         } else {
-            frog?.let { capturedFrog ->
-                Column(
+            val captured = frog!!
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+
+                // Image
+                Image(
+                    painter = rememberAsyncImagePainter(Uri.parse(captured.imageUri)),
+                    contentDescription = captured.speciesName,
+                    contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    // ✅ Image Preview
-                    capturedFrog.imageUri?.let { uriString ->
-                        Image(
-                            painter = rememberAsyncImagePainter(Uri.parse(uriString)),
-                            contentDescription = "Captured Frog",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(280.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(ComposeColor(0xFFEEEEEE))
-                                .padding(4.dp)
+                        .size(280.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFFEEEEEE))
+                )
+
+                Spacer(Modifier.height(16.dp))
+
+                // Species Name
+                Text(
+                    text = captured.speciesName.ifBlank { "Unknown Species" },
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        color = Color(0xFF2E7D32),
+                        fontWeight = FontWeight.Bold
+                    ),
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                // Location (human readable or coords)
+                val locationText = when {
+                    !captured.locationName.isNullOrBlank() -> captured.locationName!!
+                    captured.latitude != null && captured.longitude != null -> {
+                        "Lat: %.4f\nLon: %.4f".format(
+                            captured.latitude, captured.longitude
                         )
                     }
+                    else -> "Unknown Location"
+                }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = locationText,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        color = Color.DarkGray
+                    ),
+                    textAlign = TextAlign.Center
+                )
 
-                    // ✅ Species name
-                    Text(
-                        text = capturedFrog.speciesName.ifBlank { "Unknown Species" },
-                        style = MaterialTheme.typography.headlineSmall.copy(
-                            color = ComposeColor(0xFF2E7D32),
-                            fontWeight = FontWeight.Bold
-                        ),
-                        textAlign = TextAlign.Center
-                    )
+                Spacer(Modifier.height(12.dp))
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                // Timestamp
+                val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                    .format(Date(captured.timestamp))
 
-                    // ✅ Location text
-                    val locationText = when {
-                        !capturedFrog.locationName.isNullOrBlank() -> capturedFrog.locationName!!
-                        (capturedFrog.latitude != null && capturedFrog.longitude != null &&
-                                capturedFrog.latitude != 0.0 && capturedFrog.longitude != 0.0) ->
-                            "Lat: %.4f, Lon: %.4f".format(
-                                capturedFrog.latitude,
-                                capturedFrog.longitude
-                            )
-                        else -> "Unknown Location"
-                    }
+                Text(
+                    text = "Captured on: $dateStr",
+                    style = MaterialTheme.typography.bodyMedium.copy(color = Color.Gray)
+                )
 
-                    Text(
-                        text = locationText,
-                        style = MaterialTheme.typography.bodyLarge.copy(
-                            color = ComposeColor.DarkGray,
-                            textAlign = TextAlign.Center
-                        )
-                    )
+                Spacer(Modifier.height(28.dp))
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                // Buttons
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
 
-                    // ✅ Capture timestamp
-                    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                    val dateString = formatter.format(Date(capturedFrog.timestamp))
-                    Text(
-                        text = "Captured on: $dateString",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            color = ComposeColor.Gray
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(28.dp))
-
-                    // ✅ Buttons
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Button(
+                        onClick = { navController.navigate("home") },
+                        colors = ButtonDefaults.buttonColors(Color(0xFF90EE90))
                     ) {
-                        Button(
-                            onClick = { navController.navigate("home") },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = ComposeColor(0xFF90EE90)
-                            )
-                        ) {
-                            Text("Home", color = ComposeColor(0xFF004400))
-                        }
+                        Text("Home", color = Color(0xFF004400))
+                    }
 
-                        Button(
-                            onClick = { navController.navigate("history") },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = ComposeColor(0xFF4CAF50)
-                            )
-                        ) {
-                            Text("History", color = ComposeColor.White)
-                        }
+                    Button(
+                        onClick = { navController.navigate("history") },
+                        colors = ButtonDefaults.buttonColors(Color(0xFF4CAF50))
+                    ) {
+                        Text("History", color = Color.White)
                     }
                 }
             }

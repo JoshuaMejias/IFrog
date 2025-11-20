@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface CapturedFrogDao {
 
-    // ✅ Acts as insert or update depending on conflict
+    // Insert OR update (because primary key conflict = replace)
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(frog: CapturedFrog): Long
 
@@ -26,4 +26,8 @@ interface CapturedFrogDao {
 
     @Delete
     suspend fun delete(frog: CapturedFrog)
+
+    @Query("UPDATE captured_frogs SET locationName = :name WHERE id = :id")
+    suspend fun updateLocation(id: Int, name: String)
+
 }
