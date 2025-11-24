@@ -40,7 +40,7 @@ fun ResultScreen(
             .fillMaxSize()
             .background(
                 brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                    colors = listOf(Color(0xFFE0FFE0), Color(0xFFB0FFB0))
+                    colors = listOf(Color(0xFFE6FFE6), Color(0xFFB9FBB9))
                 )
             ),
         contentAlignment = Alignment.Center
@@ -57,38 +57,59 @@ fun ResultScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
 
-                // Image
+                // Image preview
                 Image(
                     painter = rememberAsyncImagePainter(Uri.parse(captured.imageUri)),
                     contentDescription = captured.speciesName,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .size(280.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFFEEEEEE))
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFFEFEFEF))
                 )
 
                 Spacer(Modifier.height(16.dp))
 
-                // Species Name
+                // Species name
                 Text(
                     text = captured.speciesName.ifBlank { "Unknown Species" },
                     style = MaterialTheme.typography.headlineSmall.copy(
-                        color = Color(0xFF2E7D32),
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFF2D7A2F)
                     ),
                     textAlign = TextAlign.Center
                 )
 
                 Spacer(Modifier.height(8.dp))
 
+                // Confidence (if stored in DB) — fallback to N/A
+                // If you'd like to persist confidence, we can add a 'confidence' field to CapturedFrog and migration.
+                val confidenceText = try {
+                    // reflection fallback: if the model has a "confidence" property, read it
+                    val prop = CapturedFrog::class.members.firstOrNull { it.name == "confidence" }
+                    if (prop != null) {
+                        val value = prop.call(captured)
+                        if (value is Number) "Confidence: ${(value.toFloat() * 100).toInt()}%"
+                        else "Confidence: N/A"
+                    } else {
+                        "Confidence: N/A"
+                    }
+                } catch (_: Exception) {
+                    "Confidence: N/A"
+                }
+
+                Text(
+                    text = confidenceText,
+                    style = MaterialTheme.typography.bodyMedium.copy(color = Color(0xFF444444))
+                )
+
+                Spacer(Modifier.height(12.dp))
+
                 // Location (human readable or coords)
                 val locationText = when {
                     !captured.locationName.isNullOrBlank() -> captured.locationName!!
                     captured.latitude != null && captured.longitude != null -> {
-                        "Lat: %.4f\nLon: %.4f".format(
-                            captured.latitude, captured.longitude
-                        )
+                        "Lat: %.5f\nLon: %.5f".format(captured.latitude, captured.longitude)
                     }
                     else -> "Unknown Location"
                 }
@@ -96,7 +117,7 @@ fun ResultScreen(
                 Text(
                     text = locationText,
                     style = MaterialTheme.typography.bodyLarge.copy(
-                        color = Color.DarkGray
+                        color = Color(0xFF444444)
                     ),
                     textAlign = TextAlign.Center
                 )
@@ -104,31 +125,47 @@ fun ResultScreen(
                 Spacer(Modifier.height(12.dp))
 
                 // Timestamp
-                val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
                     .format(Date(captured.timestamp))
 
                 Text(
                     text = "Captured on: $dateStr",
-                    style = MaterialTheme.typography.bodyMedium.copy(color = Color.Gray)
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = Color(0xFF666666)
+                    )
                 )
 
-                Spacer(Modifier.height(28.dp))
+                Spacer(Modifier.height(24.dp))
 
-                // Buttons
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                // Buttons: Home, History, Show on Map
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
 
                     Button(
                         onClick = { navController.navigate("home") },
-                        colors = ButtonDefaults.buttonColors(Color(0xFF90EE90))
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA8F0A8))
                     ) {
-                        Text("Home", color = Color(0xFF004400))
+                        Text("Home", color = Color(0xFF005500))
                     }
 
                     Button(
                         onClick = { navController.navigate("history") },
-                        colors = ButtonDefaults.buttonColors(Color(0xFF4CAF50))
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
                     ) {
                         Text("History", color = Color.White)
+                    }
+
+                    // Show on Map — navigates to your existing map route and focuses the frog
+                    Button(
+                        onClick = {
+                            // existing route expects frogId as String
+                            navController.navigate("map/${captured.id}")
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4DB6AC))
+                    ) {
+                        Text("Show on Map", color = Color.White)
                     }
                 }
             }

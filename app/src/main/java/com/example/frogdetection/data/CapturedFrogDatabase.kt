@@ -5,26 +5,35 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.frogdetection.dao.CapturedFrogDao
 import com.example.frogdetection.dao.LocationCacheDao
 import com.example.frogdetection.model.CapturedFrog
-import com.example.frogdetection.model.Converters
 import com.example.frogdetection.model.LocationCache
 
 @Database(
     entities = [CapturedFrog::class, LocationCache::class],
-    version = 4, // ✅ incremented from 3 → 4 because schema changed
+    version = 5, // bumped from 4 -> 5
     exportSchema = false
 )
-@TypeConverters(Converters::class)
+@TypeConverters(UriTypeConverter::class)
 abstract class CapturedFrogDatabase : RoomDatabase() {
 
     abstract fun capturedFrogDao(): CapturedFrogDao
-    abstract fun locationCacheDao(): LocationCacheDao  // ✅ new DAO for caching
+    abstract fun locationCacheDao(): LocationCacheDao
 
     companion object {
         @Volatile
         private var INSTANCE: CapturedFrogDatabase? = null
+
+        // Migration: add 'confidence' column (REAL) to captured_frogs
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Add new NULLABLE column 'confidence' (REAL)
+                database.execSQL("ALTER TABLE captured_frogs ADD COLUMN confidence REAL")
+            }
+        }
 
         fun getDatabase(context: Context): CapturedFrogDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -33,7 +42,7 @@ abstract class CapturedFrogDatabase : RoomDatabase() {
                     CapturedFrogDatabase::class.java,
                     "captured_frog_db"
                 )
-                    .fallbackToDestructiveMigration() // ✅ Safe schema rebuild
+                    .addMigrations(MIGRATION_4_5)
                     .build()
                 INSTANCE = instance
                 instance

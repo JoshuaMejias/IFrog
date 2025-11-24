@@ -87,9 +87,16 @@ dependencies {
 //    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
 //    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
 
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.0")
+//    implementation("org.tensorflow:tensorflow-lite:2.12.0")
+//    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.12.0")
+//    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
 
 
+// ONNX Runtime Mobile CPU
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:latest.release")
+
+    // Permissions helper
+    implementation("com.google.accompanist:accompanist-permissions:0.34.0")
 
 
     // ✅ Room with KSP (not kapt)

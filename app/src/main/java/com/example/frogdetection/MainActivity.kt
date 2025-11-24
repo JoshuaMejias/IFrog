@@ -97,26 +97,30 @@ class MainActivity : ComponentActivity() {
                             route = "preview/{imageUri}/{lat}/{lon}",
                             arguments = listOf(
                                 navArgument("imageUri") { type = NavType.StringType },
-                                navArgument("lat") { type = NavType.StringType },
-                                navArgument("lon") { type = NavType.StringType }
+                                navArgument("lat") { type = NavType.FloatType },
+                                navArgument("lon") { type = NavType.FloatType }
                             )
                         ) { backStackEntry ->
 
-                            val encodedUri = backStackEntry.arguments?.getString("imageUri")
-                            val decodedUri = encodedUri?.let { Uri.decode(it) }
+                            val imageUriStr = backStackEntry.arguments?.getString("imageUri")
+                            val decodedUri = Uri.parse(imageUriStr ?: "")
 
-                            val lat = backStackEntry.arguments?.getString("lat")?.toDoubleOrNull()
-                            val lon = backStackEntry.arguments?.getString("lon")?.toDoubleOrNull()
+                            val lat = backStackEntry.arguments?.getFloat("lat")?.toDouble()
+                            val lon = backStackEntry.arguments?.getFloat("lon")?.toDouble()
+
+                            val historyViewModel: CapturedHistoryViewModel = viewModel()
 
                             ImagePreviewScreen(
                                 navController = navController,
                                 imageUri = decodedUri,
                                 latitude = lat,
                                 longitude = lon,
-                                viewModel = historyViewModel   // <-- FIX
+                                viewModel = historyViewModel
                             )
-
                         }
+
+
+
 
 
 

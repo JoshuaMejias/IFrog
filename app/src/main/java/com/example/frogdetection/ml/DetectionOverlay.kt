@@ -1,67 +1,138 @@
 package com.example.frogdetection.ml
 
-import android.graphics.*
+import android.graphics.Bitmap
+import android.graphics.Paint
+import androidx.compose.foundation.Canvas
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.unit.dp
 import com.example.frogdetection.utils.FrogDetectionResult
 import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Draw detection results onto a bitmap (mutable copy returned).
+ * Draws bounding boxes correctly even when Image() uses ContentScale.Crop.
  */
-fun drawDetections(original: Bitmap, detections: List<FrogDetectionResult>): Bitmap {
-    val out = original.copy(Bitmap.Config.ARGB_8888, true)
-    val canvas = Canvas(out)
+@Composable
+fun DetectionOverlay(
+    bitmap: Bitmap,
+    detections: List<FrogDetectionResult>,
+    modifier: Modifier
+) {
+    Canvas(modifier = modifier) {
 
-    val scaleFactor = max(1f, original.width / 640f)
+        val viewW = size.width
+        val viewH = size.height
 
-    val boxPaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 4f * scaleFactor
-        isAntiAlias = true
-    }
-    val textPaint = Paint().apply {
-        color = Color.WHITE
-        textSize = 28f * scaleFactor
-        isAntiAlias = true
-        typeface = Typeface.create(Typeface.DEFAULT_BOLD, Typeface.BOLD)
-        setShadowLayer(4f * scaleFactor, 2f * scaleFactor, 2f * scaleFactor, Color.BLACK)
-    }
-    val bgPaint = Paint().apply {
-        color = Color.argb(170, 0, 0, 0)
-        style = Paint.Style.FILL
-        isAntiAlias = true
-    }
+        val bmpW = bitmap.width.toFloat()
+        val bmpH = bitmap.height.toFloat()
 
-    for (d in detections) {
-        val rect = d.box
-        val conf = d.score
-        val label = d.label
-        boxPaint.color = when {
-            conf >= 0.85f -> Color.rgb(0, 200, 0)
-            conf >= 0.7f -> Color.rgb(255, 200, 0)
-            else -> Color.rgb(220, 0, 0)
+        // Aspect ratios
+        val viewRatio = viewW / viewH
+        val bmpRatio = bmpW / bmpH
+
+        // Compute how bitmap is scaled and centered inside the view when ContentScale.Crop is used.
+        // CROP = fill entire view, center align, extra cropped.
+        val scale: Float
+        val dx: Float
+        val dy: Float
+
+        if (bmpRatio > viewRatio) {
+            // bitmap is wider → height fits, width crops
+            scale = viewH / bmpH
+            val scaledWidth = bmpW * scale
+            dx = (viewW - scaledWidth) / 2f  // negative → cropped
+            dy = 0f
+        } else {
+            // bitmap is taller → width fits, height crops
+            scale = viewW / bmpW
+            val scaledHeight = bmpH * scale
+            dx = 0f
+            dy = (viewH - scaledHeight) / 2f // negative → cropped
         }
-        boxPaint.strokeWidth = (3f + conf * 6f) * scaleFactor
 
-        val left = max(0f, rect.left)
-        val top = max(0f, rect.top)
-        val right = min(out.width.toFloat(), rect.right)
-        val bottom = min(out.height.toFloat(), rect.bottom)
-        val drawRect = RectF(left, top, right, bottom)
-        canvas.drawRect(drawRect, boxPaint)
+        // Box appearance
+        val dashedBorder = PathEffect.dashPathEffect(floatArrayOf(14f, 14f), 0f)
 
-        // label background
-        val caption = "$label ${(conf * 100).toInt()}%"
-        val tw = textPaint.measureText(caption)
-        val padding = 6f * scaleFactor
-        var by = top - (textPaint.textSize + padding * 2)
-        if (by < 0) by = top
-        val bgRect = RectF(left, by, left + tw + padding * 2, by + textPaint.textSize + padding * 2)
-        canvas.drawRoundRect(bgRect, 8f * scaleFactor, 8f * scaleFactor, bgPaint)
+        detections.forEach { det ->
+            val b = det.box
 
-        // text
-        canvas.drawText(caption, bgRect.left + padding, bgRect.bottom - padding - 4f * scaleFactor, textPaint)
+            // Map original bitmap box → cropped display coordinates
+            val left   = b.left * scale + dx
+            val top    = b.top * scale + dy
+            val right  = b.right * scale + dx
+            val bottom = b.bottom * scale + dy
+
+            // Prevent drawing outside view
+            if (right < 0 || left > viewW || bottom < 0 || top > viewH) return@forEach
+
+            // Dynamic color by confidence
+            val boxColor = when {
+                det.score >= 0.8f -> Color(0xFF00FF00)
+                det.score >= 0.6f -> Color(0xFFFFFF00)
+                else -> Color(0xFFFF0000)
+            }
+
+            // Draw rectangle border
+            drawRect(
+                color = boxColor,
+                topLeft = Offset(left, top),
+                size = Size(right - left, bottom - top),
+                style = Stroke(width = 4f, pathEffect = dashedBorder)
+            )
+
+            // Draw label background + text
+            val caption = "${det.label} ${(det.score * 100).toInt()}%"
+            val textPadding = 8f
+
+            drawIntoCanvas { canvas ->
+                val bgPaint = Paint().apply {
+                    color = android.graphics.Color.argb(170, 0, 0, 0)
+                    style = Paint.Style.FILL
+                }
+
+                val textPaint = Paint().apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = 38f
+                    isAntiAlias = true
+                    typeface = android.graphics.Typeface.create(
+                        android.graphics.Typeface.DEFAULT,
+                        android.graphics.Typeface.BOLD
+                    )
+                }
+
+                val textWidth = textPaint.measureText(caption)
+                val textHeight = textPaint.fontMetrics.bottom - textPaint.fontMetrics.top
+
+                val rectLeft = left
+                var rectTop = top - (textHeight + textPadding * 2)
+
+                // Keep label within screen
+                if (rectTop < 0) rectTop = top
+
+                val rect = android.graphics.RectF(
+                    rectLeft,
+                    rectTop,
+                    rectLeft + textWidth + textPadding * 2,
+                    rectTop + textHeight + textPadding * 2
+                )
+
+                canvas.nativeCanvas.drawRoundRect(rect, 14f, 14f, bgPaint)
+
+                canvas.nativeCanvas.drawText(
+                    caption,
+                    rect.left + textPadding,
+                    rect.bottom - textPadding - 6f,
+                    textPaint
+                )
+            }
+        }
     }
-
-    return out
 }
