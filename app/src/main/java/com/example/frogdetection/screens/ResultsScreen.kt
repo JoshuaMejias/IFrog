@@ -82,21 +82,9 @@ fun ResultScreen(
 
                 Spacer(Modifier.height(8.dp))
 
-                // Confidence (if stored in DB) — fallback to N/A
-                // If you'd like to persist confidence, we can add a 'confidence' field to CapturedFrog and migration.
-                val confidenceText = try {
-                    // reflection fallback: if the model has a "confidence" property, read it
-                    val prop = CapturedFrog::class.members.firstOrNull { it.name == "confidence" }
-                    if (prop != null) {
-                        val value = prop.call(captured)
-                        if (value is Number) "Confidence: ${(value.toFloat() * 100).toInt()}%"
-                        else "Confidence: N/A"
-                    } else {
-                        "Confidence: N/A"
-                    }
-                } catch (_: Exception) {
-                    "Confidence: N/A"
-                }
+                // Confidence score (0..1)
+                val confidenceText =
+                    "Confidence: ${(captured.score * 100).toInt()}%"
 
                 Text(
                     text = confidenceText,
@@ -105,12 +93,11 @@ fun ResultScreen(
 
                 Spacer(Modifier.height(12.dp))
 
-                // Location (human readable or coords)
+                // Location
                 val locationText = when {
                     !captured.locationName.isNullOrBlank() -> captured.locationName!!
-                    captured.latitude != null && captured.longitude != null -> {
+                    captured.latitude != null && captured.longitude != null ->
                         "Lat: %.5f\nLon: %.5f".format(captured.latitude, captured.longitude)
-                    }
                     else -> "Unknown Location"
                 }
 
@@ -157,12 +144,8 @@ fun ResultScreen(
                         Text("History", color = Color.White)
                     }
 
-                    // Show on Map — navigates to your existing map route and focuses the frog
                     Button(
-                        onClick = {
-                            // existing route expects frogId as String
-                            navController.navigate("map/${captured.id}")
-                        },
+                        onClick = { navController.navigate("map") },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4DB6AC))
                     ) {
                         Text("Show on Map", color = Color.White)

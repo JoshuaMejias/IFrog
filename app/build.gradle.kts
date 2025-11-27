@@ -3,7 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
 //    id("com.google.devtools.ksp") version "1.9.24-1.0.20"
     alias(libs.plugins.ksp)
-
+    id("org.jetbrains.kotlin.plugin.serialization") version "1.9.23"
 }
 
 android {
@@ -97,6 +97,16 @@ dependencies {
 
     // Permissions helper
     implementation("com.google.accompanist:accompanist-permissions:0.34.0")
+
+    implementation("com.squareup.okhttp3:okhttp:4.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // Supabase
+
+
+    implementation("org.json:json:20230227") // or use Android's JSONObject which is available already
+
+    implementation("androidx.preference:preference-ktx:1.2.1")
 
 
     // ✅ Room with KSP (not kapt)

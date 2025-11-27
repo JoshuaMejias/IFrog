@@ -1,12 +1,16 @@
+// File: app/src/main/java/com/example/frogdetection/screens/DistributionMapScreen.kt
 package com.example.frogdetection.screens
 
-import android.graphics.*
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,323 +19,279 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavController
-import coil.ImageLoader
-import coil.compose.rememberAsyncImagePainter
-import coil.request.ImageRequest
-import coil.request.SuccessResult
 import com.example.frogdetection.R
-import com.example.frogdetection.model.CapturedFrog
-import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
+import com.example.frogdetection.net.SupabaseService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import androidx.compose.foundation.Image
+import org.json.JSONArray
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
-import org.osmdroid.views.overlay.Overlay
 import java.text.SimpleDateFormat
 import java.util.*
 
-/**
- * Color mapping for the 6 frog species.
- * Use Android color ints for Bitmap drawing; convert Compose Color when needed.
- */
-private val SpeciesColorMap = mapOf(
-    "Asian Painted Frog" to android.graphics.Color.parseColor("#2196F3"),          // Blue
-    "Cane Toad" to android.graphics.Color.parseColor("#F44336"),                  // Red
-    "Common Southeast Asian Tree Frog" to android.graphics.Color.parseColor("#4CAF50"), // Green
-    "East Asian Bullfrog" to android.graphics.Color.parseColor("#FFEB3B"),        // Yellow
-    "Paddy Field Frog" to android.graphics.Color.parseColor("#9C27B0"),          // Purple
-    "Wood Frog" to android.graphics.Color.parseColor("#FF9800")                  // Orange
-)
 
 /**
- * Simple floating legend (top-right).
+ * Minimal online-only Distribution Map screen:
+ * - Manual "Refresh" button
+ * - Queries SupabaseService.queryDetections(south,north,west,east)
+ * - Shows simple colored vector pin icons (from drawable resources)
+ * - Simple popup card when a marker is tapped
  */
-@Composable
-private fun SpeciesLegend(modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .padding(12.dp)
-            .wrapContentWidth()
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f), RoundedCornerShape(10.dp))
-            .padding(8.dp)
-    ) {
-        Text("Legend", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 6.dp))
-        SpeciesColorMap.forEach { (species, colorInt) ->
-            Row(modifier = Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                // color swatch
-                Box(
-                    modifier = Modifier
-                        .size(14.dp)
-                        .background(androidx.compose.ui.graphics.Color(colorInt))
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(species, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
 
-/**
- * DistributionMapScreen:
- * - colored photo-pin markers (per species)
- * - cached marker bitmaps keyed by (imageUri + species)
- * - top-right legend
- * - pop-up card on marker tap
- */
 @Composable
 fun DistributionMapScreen(
     navController: NavController,
-    viewModel: CapturedHistoryViewModel,
-    focusedFrogId: String? = null
+    supabaseUrl: String = "https://pdfcvwuketwptqtnjhbc.supabase.co",
+    supabaseKey: String = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBkZmN2d3VrZXR3cHRxdG5qaGJjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwNjMxOTQsImV4cCI6MjA3OTYzOTE5NH0.SOA5H2A6iCzFgPX-rNG9u6KmRZUXEmDJWSk7v_bZujY" // replace or inject from BuildConfig/resources
 ) {
-    val frogs by viewModel.capturedFrogs.collectAsState(initial = emptyList())
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
+    // MapView reference
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
-    var selectedFrog by remember { mutableStateOf<CapturedFrog?>(null) }
-    var selectedPoint by remember { mutableStateOf<GeoPoint?>(null) }
 
-    // Marker bitmap cache: key = "$imageUri|$species"
-    val markerCache = remember { mutableStateMapOf<String, Bitmap>() }
+    // Selected online frog for popup
+    var selected by remember { mutableStateOf<OnlineFrog?>(null) }
+
+    // Loading state for network fetch
+    var loading by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    // Instantiate SupabaseService (uses OkHttp in your project)
+    val supabaseService = remember {
+        SupabaseService(
+            supabaseUrl = supabaseUrl,
+            supabaseKey = supabaseKey,
+            tableName = "frog_records"
+        )
+    }
+
+    // species -> drawable mapping (match your drawable filenames)
+    val speciesIconMap = mapOf(
+        "Asian Painted Frog" to R.drawable.ic_pin_blue,
+        "Cane Toad" to R.drawable.ic_pin_red,
+        "Common Southeast Asian Tree Frog" to R.drawable.ic_pin_green,
+        "East Asian Bullfrog" to R.drawable.ic_pin_yellow,
+        "Paddy Field Frog" to R.drawable.ic_pin_purple,
+        "Wood Frog" to R.drawable.ic_pin_orange
+    )
 
     Box(modifier = Modifier.fillMaxSize()) {
+
         AndroidView(
             factory = { ctx ->
                 MapView(ctx).apply {
                     setTileSource(TileSourceFactory.MAPNIK)
                     setMultiTouchControls(true)
-                    controller.setZoom(11.0)
-                    controller.setCenter(GeoPoint(9.85, 124.14))
+                    controller.setZoom(11)  // GOOD level for Bohol province
+                    controller.setCenter(GeoPoint(9.84999, 124.14354))  // Tagbilaran City center
+
                     mapViewRef = this
                 }
             },
-            update = { mapView ->
-                mapViewRef = mapView
-            }
+            update = { mv ->
+                // keep reference updated
+                mapViewRef = mv
+            },
+            modifier = Modifier.fillMaxSize()
         )
 
-        // Update markers when frogs list changes
-        LaunchedEffect(frogs) {
-            val mapView = mapViewRef ?: return@LaunchedEffect
-            withContext(Dispatchers.IO) {
-                val markers = frogs.mapNotNull { frog ->
-                    val lat = frog.latitude ?: return@mapNotNull null
-                    val lon = frog.longitude ?: return@mapNotNull null
-                    val species = frog.speciesName
-                    val key = "${frog.imageUri}|$species"
-
-                    val bmp = markerCache.getOrPut(key) {
-                        val photo = loadBitmapFromUri(context, frog.imageUri)
-                        createSpeciesPinMarker(context, photo, species, isFocused = (frog.id.toString() == focusedFrogId))
-                    }
-
-                    val marker = Marker(mapView).apply {
-                        position = GeoPoint(lat, lon)
-                        title = species
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        icon = BitmapDrawable(context.resources, bmp)
-                        setOnMarkerClickListener { _, _ ->
-                            selectedFrog = frog
-                            selectedPoint = GeoPoint(lat, lon)
-                            true
-                        }
-                    }
-                    marker
-                }
-
-                withContext(Dispatchers.Main) {
-                    mapView.overlays.clear()
-                    mapView.overlays.addAll(markers)
-
-                    // overlay to dismiss popup on tap
-                    mapView.overlays.add(object : Overlay() {
-                        override fun onSingleTapConfirmed(e: android.view.MotionEvent?, mapView: MapView?): Boolean {
-                            selectedFrog = null
-                            return super.onSingleTapConfirmed(e, mapView)
-                        }
-                    })
-
-                    mapView.invalidate()
-                }
-            }
-        }
-
-        // Focus on a frog if requested
-        LaunchedEffect(frogs, focusedFrogId) {
-            val mapView = mapViewRef ?: return@LaunchedEffect
-            val frog = frogs.find { it.id.toString() == focusedFrogId }
-            if (frog != null && frog.latitude != null && frog.longitude != null) {
-                // wait a moment for markers to be placed
-                kotlinx.coroutines.delay(250)
-                mapView.controller.animateTo(GeoPoint(frog.latitude, frog.longitude), 14.0, 800L)
-            }
-        }
-
-        // Top-right floating legend
-        Box(modifier = Modifier.fillMaxSize()) {
-            SpeciesLegend(modifier = Modifier.align(Alignment.TopEnd))
-        }
-
-        // Popup card when a marker is selected
-        if (selectedFrog != null && selectedPoint != null) {
-            PopupFrogCard(selectedFrog!!, selectedPoint!!, navController) {
-                selectedFrog = null
-            }
-        }
-    }
-}
-
-/**
- * Small popup card for a selected frog marker.
- * Clicking navigates to result screen.
- */
-@Composable
-private fun PopupFrogCard(
-    frog: CapturedFrog,
-    position: GeoPoint,
-    navController: NavController,
-    onDismiss: () -> Unit
-) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Card(
+        // Floating refresh button (top-right)
+        Column(
             modifier = Modifier
-                .padding(bottom = 120.dp)
-                .width(220.dp)
-                .wrapContentHeight()
-                .clickable {
-                    onDismiss()
-                    navController.navigate("resultScreen/${frog.id}")
-                },
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(8.dp)
+                .fillMaxSize()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.Top
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(10.dp)
+            ExtendedFloatingActionButton(
+                onClick = {
+                    errorMsg = null
+                    loading = true
+                    // Run fetch in coroutine
+                    scope.launch {
+                        val mv = mapViewRef
+                        if (mv == null) {
+                            errorMsg = "Map not ready"
+                            loading = false
+                            return@launch
+                        }
+
+                        // get bounding box from map view
+                        val bb: BoundingBox = mv.boundingBox
+                        // bounding box provides latNorth/latSouth/lonEast/lonWest
+                        val south = bb.latSouth
+                        val north = bb.latNorth
+                        val west = bb.lonWest
+                        val east = bb.lonEast
+
+                        try {
+                            val arr: JSONArray = withContext(Dispatchers.IO) {
+                                supabaseService.queryDetections(south, north, west, east, limit = 1000)
+                            }
+                            // Update markers on UI thread
+                            withContext(Dispatchers.Main) {
+                                // clear old markers (except tile overlays)
+                                mv.overlays.filterIsInstance<Marker>().forEach { mv.overlays.remove(it) }
+                                // parse and add markers
+                                for (i in 0 until arr.length()) {
+                                    val obj = arr.getJSONObject(i)
+                                    val lat = obj.optDouble("latitude", Double.NaN)
+                                    val lon = obj.optDouble("longitude", Double.NaN)
+                                    if (lat.isNaN() || lon.isNaN()) continue
+
+                                    val species = obj.optString("species_name", "Unknown")
+                                    val locationName = obj.optString("location_name", "")
+                                    val ts = obj.optLong("timestamp", 0L)
+                                    val imageUrl = obj.optString("image_url", "")
+
+                                    val geo = GeoPoint(lat, lon)
+                                    val marker = Marker(mv)
+                                    marker.position = geo
+                                    marker.title = species
+                                    marker.subDescription = locationName
+                                    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+
+                                    // Choose icon (fallback to default)
+                                    val drawableId = speciesIconMap[species] ?: R.drawable.ic_pin_green
+                                    val drawable = ContextCompat.getDrawable(context, drawableId)
+                                    drawable?.let {
+                                        marker.icon = drawableToBitmapDrawable(context, it)
+                                    }
+
+                                    marker.setOnMarkerClickListener { m, _ ->
+                                        selected = OnlineFrog(
+                                            id = obj.optInt("id", -1),
+                                            species = species,
+                                            locationName = locationName,
+                                            timestamp = ts,
+                                            latitude = lat,
+                                            longitude = lon,
+                                            imageUrl = imageUrl
+                                        )
+                                        true
+                                    }
+
+                                    mv.overlays.add(marker)
+                                }
+                                mv.invalidate()
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            errorMsg = "Failed to load markers: ${e.message}"
+                        } finally {
+                            loading = false
+                        }
+                    }
+                },
+                icon = { Icon(androidx.compose.material.icons.Icons.Default.Refresh, contentDescription = null) },
+                text = { Text("Refresh Markers") }
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (loading) {
+                Card(
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .wrapContentWidth()
+                        .padding(4.dp)
+                ) {
+                    Text("Loading...", modifier = Modifier.padding(8.dp))
+                }
+            }
+
+            if (errorMsg != null) {
+                Card(
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .wrapContentWidth()
+                        .padding(4.dp)
+                ) {
+                    Text("Error: $errorMsg", modifier = Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+
+        // Popup card for selected marker
+        selected?.let { frog ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 120.dp),
+                contentAlignment = Alignment.BottomCenter
             ) {
-                val painter = rememberAsyncImagePainter(Uri.parse(frog.imageUri))
-                Image(
-                    painter = painter,
-                    contentDescription = frog.speciesName,
-                    modifier = Modifier.size(100.dp)
-                )
-
-                Spacer(Modifier.height(6.dp))
-
-                Text(frog.speciesName, style = MaterialTheme.typography.titleMedium)
-                Text(frog.locationName ?: "Unknown", style = MaterialTheme.typography.bodySmall)
-
-                val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                    .format(Date(frog.timestamp))
-
-                Text(dateStr, style = MaterialTheme.typography.bodySmall)
-
-                Spacer(Modifier.height(6.dp))
-
-                Text(
-                    "Tap for details",
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelSmall
-                )
+                Card(
+                    modifier = Modifier
+                        .padding(12.dp)
+                        .widthIn(min = 220.dp, max = 340.dp)
+                        .clickable {
+                            // navigate to details screen if desired
+                            // navController.navigate("resultScreen/${frog.id}")
+                        },
+                    elevation = CardDefaults.cardElevation(8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(frog.species, style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(6.dp))
+                        Text(frog.locationName.ifBlank { "Unknown location" }, style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(6.dp))
+                        val dateStr = if (frog.timestamp > 0) {
+                            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(frog.timestamp))
+                        } else "Unknown time"
+                        Text(dateStr, style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                selected = null
+                            }) {
+                                Text("Close")
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Button(onClick = {
+                                // navigate to details
+                                selected = null
+                                // navController.navigate("resultScreen/${frog.id}")
+                            }) {
+                                Text("Details")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
+/**
+ * Simple data holder for online frog record returned from Supabase.
+ */
+private data class OnlineFrog(
+    val id: Int,
+    val species: String,
+    val locationName: String,
+    val timestamp: Long,
+    val latitude: Double,
+    val longitude: Double,
+    val imageUrl: String
+)
 
 /**
- * Load a bitmap safely from a URI string (uses Coil).
- * Returns null on failure.
+ * Convert a Drawable (vector) into BitmapDrawable for osmdroid Marker.icon
  */
-suspend fun loadBitmapFromUri(context: android.content.Context, uriString: String?): Bitmap? {
-    if (uriString.isNullOrEmpty()) return null
-    return try {
-        val loader = ImageLoader(context)
-        val request = ImageRequest.Builder(context)
-            .data(Uri.parse(uriString))
-            .allowHardware(false)
-            .build()
-        val result = (loader.execute(request) as? SuccessResult)?.drawable as? BitmapDrawable
-        result?.bitmap
-    } catch (e: Exception) {
-        null
-    }
-}
-
-/**
- * Create a teardrop photo-pin marker where the outer body color is chosen by species.
- * - photo may be null (fallback icon is used)
- * - isFocused toggles an outer white stroke
- */
-fun createSpeciesPinMarker(context: android.content.Context, photo: Bitmap?, species: String, isFocused: Boolean): Bitmap {
-    val pinWidth = 100
-    val pinHeight = (pinWidth * 1.35f).toInt()
-    val bitmap = Bitmap.createBitmap(pinWidth, pinHeight, Bitmap.Config.ARGB_8888)
+private fun drawableToBitmapDrawable(context: android.content.Context, drawable: Drawable): BitmapDrawable {
+    if (drawable is BitmapDrawable) return drawable
+    val width = (drawable.intrinsicWidth.takeIf { it > 0 } ?: 48)
+    val height = (drawable.intrinsicHeight.takeIf { it > 0 } ?: 48)
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-    val baseColor = SpeciesColorMap[species] ?: android.graphics.Color.parseColor("#4CAF50")
-    paint.color = baseColor
-    paint.style = Paint.Style.FILL
-
-    val cx = pinWidth / 2f
-    val cy = pinHeight / 2.7f
-    val radius = pinWidth / 3.2f
-
-    // Draw teardrop body path
-    val path = Path().apply {
-        moveTo(cx, pinHeight.toFloat())
-        quadTo(pinWidth.toFloat(), pinHeight * 0.22f, cx + radius, cy)
-        arcTo(RectF(cx - radius, cy - radius, cx + radius, cy + radius), 0f, 180f, false)
-        quadTo(0f, pinHeight * 0.22f, cx, pinHeight.toFloat())
-        close()
-    }
-    canvas.drawPath(path, paint)
-
-    // White frame circle for photo
-    val innerRadius = pinWidth / 4.6f
-    paint.color = android.graphics.Color.WHITE
-    canvas.drawCircle(cx, cy, innerRadius + 5f, paint)
-
-    // Draw photo or fallback inside frame
-    if (photo != null) {
-        val scaled = Bitmap.createScaledBitmap(photo, (innerRadius * 2).toInt(), (innerRadius * 2).toInt(), true)
-        val shader = BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-        paint.shader = shader
-        paint.style = Paint.Style.FILL
-        canvas.drawCircle(cx, cy, innerRadius, paint)
-        paint.shader = null
-    } else {
-        val fallback = ContextCompat.getDrawable(context, R.drawable.frog_marker)
-        if (fallback != null) {
-            val fb = Bitmap.createBitmap(
-                fallback.intrinsicWidth.coerceAtLeast(1),
-                fallback.intrinsicHeight.coerceAtLeast(1),
-                Bitmap.Config.ARGB_8888
-            )
-            val fbCanvas = Canvas(fb)
-            fallback.setBounds(0, 0, fbCanvas.width, fbCanvas.height)
-            fallback.draw(fbCanvas)
-            canvas.drawBitmap(fb, null, RectF(cx - innerRadius, cy - innerRadius, cx + innerRadius, cy + innerRadius), null)
-        }
-    }
-
-    // Focus outline
-    if (isFocused) {
-        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.WHITE
-            style = Paint.Style.STROKE
-            strokeWidth = 6f
-        }
-        canvas.drawPath(path, strokePaint)
-    }
-
-    return bitmap
+    drawable.setBounds(0, 0, canvas.width, canvas.height)
+    drawable.draw(canvas)
+    return BitmapDrawable(context.resources, bitmap)
 }

@@ -38,11 +38,13 @@ fun BottomNavBar(navController: NavController) {
             selected = currentRoute?.startsWith("map") == true,
             onClick = {
                 // Provide default species to avoid navigation crash
-                navController.navigate("map/Kaloula pulchra") {
+                navController.navigate("map") {
                     popUpTo(navController.graph.startDestinationId) { saveState = true }
                     launchSingleTop = true
                     restoreState = true
                 }
+
+
             }
         )
 

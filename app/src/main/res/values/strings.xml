@@ -3,4 +3,8 @@
 <!--    <string name="google_maps_key">AIzaSyAx9zSYQtnBo-6uRkw0XytSj1zZ_2yMS2Q</string>-->
     <string name="opencage_api_key">35ee311961ed494da02b3ba387e2f3c2</string>
 
+
+        <string name="supabase_url">https://pdfcvwuketwptqtnjhbc.supabase.co</string>
+        <string name="supabase_anon_key">eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBkZmN2d3VrZXR3cHRxdG5qaGJjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwNjMxOTQsImV4cCI6MjA3OTYzOTE5NH0.SOA5H2A6iCzFgPX-rNG9u6KmRZUXEmDJWSk7v_bZujY</string>
+
 </resources>

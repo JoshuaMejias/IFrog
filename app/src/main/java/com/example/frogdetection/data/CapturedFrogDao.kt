@@ -1,33 +1,24 @@
-package com.example.frogdetection.dao
+package com.example.frogdetection.data
 
-import androidx.room.Dao
-import androidx.room.Delete
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
+import androidx.room.*
 import com.example.frogdetection.model.CapturedFrog
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface CapturedFrogDao {
 
-    // Insert OR update (because primary key conflict = replace)
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(frog: CapturedFrog): Long
-
     @Query("SELECT * FROM captured_frogs ORDER BY timestamp DESC")
-    fun getAllFrogs(): Flow<List<CapturedFrog>>
+    fun getAll(): Flow<List<CapturedFrog>>
 
     @Query("SELECT * FROM captured_frogs WHERE id = :id LIMIT 1")
-    suspend fun getFrogById(id: Int): CapturedFrog?
+    suspend fun getById(id: Int): CapturedFrog?
 
-    @Query("DELETE FROM captured_frogs")
-    suspend fun deleteAll()
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(frog: CapturedFrog): Long
 
     @Delete
     suspend fun delete(frog: CapturedFrog)
 
     @Query("UPDATE captured_frogs SET locationName = :name WHERE id = :id")
     suspend fun updateLocation(id: Int, name: String)
-
 }

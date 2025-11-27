@@ -16,129 +16,124 @@ import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import com.example.frogdetection.screens.*
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
+import org.osmdroid.config.Configuration
+import androidx.preference.PreferenceManager
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 🔥 REQUIRED: OSMDroid initialization (fixes blank map)
+        val ctx = applicationContext
+        val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
+        Configuration.getInstance().load(ctx, prefs)
+        Configuration.getInstance().userAgentValue = ctx.packageName
+
         setContent {
             iFrogTheme {
+
                 val navController = rememberNavController()
-                val navBackStackEntry by navController.currentBackStackEntryAsState()
-                val currentRoute = navBackStackEntry?.destination?.route
 
-                val historyViewModel: CapturedHistoryViewModel = viewModel(
-                    factory = ViewModelProvider.AndroidViewModelFactory.getInstance(application)
-                )
-
-                LaunchedEffect(Unit) {
-                    historyViewModel.migrateMissingLocations()
-                }
+                // Use single shared ViewModel across entire app
+                val historyViewModel: CapturedHistoryViewModel =
+                    viewModel(factory = ViewModelProvider.AndroidViewModelFactory(application))
 
                 Scaffold(
                     bottomBar = {
-                        if (currentRoute !in listOf("splash", "welcome")) {
+                        val route = navController.currentBackStackEntryAsState().value?.destination?.route
+                        if (route !in listOf("splash", "welcome")) {
                             BottomNavBar(navController)
                         }
                     }
-                ) { innerPadding ->
+                ) { padding ->
 
                     NavHost(
                         navController = navController,
                         startDestination = "splash",
-                        modifier = Modifier.padding(innerPadding)
+                        modifier = Modifier.padding(padding)
                     ) {
+
+                        // ───────────────────────────────
+                        // BASIC ROUTES
+                        // ───────────────────────────────
                         composable("splash") { SplashScreen(navController) }
                         composable("welcome") { WelcomeScreen(navController) }
                         composable("home") { HomeScreen(navController) }
-
-                        composable("dictionary") {
-                            FrogDictionaryScreen(navController, frogs = frogList)
-                        }
-
-                        composable("frogDetail/{frogName}",
-                            arguments = listOf(
-                                navArgument("frogName") { type = NavType.StringType }
-                            )
-                        ) { backStackEntry ->
-                            val frogName = backStackEntry.arguments?.getString("frogName")
-                            val startIndex = frogList.indexOfFirst { it.name == frogName }
-                            if (startIndex != -1) {
-                                FrogDetailScreen(
-                                    navController,
-                                    frogs = frogList,
-                                    startIndex = startIndex
-                                )
-                            }
-                        }
-
-                        composable("history") {
-                            CapturedHistoryScreen(navController, historyViewModel)
-                        }
-
-                        // FIXED — valid route
-                        composable(
-                            route = "map/{frogId}",
-                            arguments = listOf(
-                                navArgument("frogId") { type = NavType.StringType }
-                            )
-                        ) { backStackEntry ->
-                            val frogId = backStackEntry.arguments?.getString("frogId")
-                            DistributionMapScreen(
-                                navController,
-                                viewModel = historyViewModel,
-                                focusedFrogId = frogId
-                            )
-                        }
-
                         composable("about") { AboutScreen(navController) }
 
+                        composable("dictionary") {
+                            FrogDictionaryScreen(navController = navController, frogs = frogList)
+                        }
+
                         composable(
-                            route = "preview/{imageUri}/{lat}/{lon}",
+                            "frogDetail/{frogName}",
+                            listOf(navArgument("frogName") { type = NavType.StringType })
+                        ) { backStack ->
+                            val frogName = backStack.arguments?.getString("frogName")
+                            val startIndex = frogList.indexOfFirst { it.name == frogName }
+                            if (startIndex != -1)
+                                FrogDetailScreen(navController, frogList, startIndex)
+                        }
+
+                        // ───────────────────────────────
+                        // HISTORY
+                        // ───────────────────────────────
+                        composable("history") {
+                            CapturedHistoryScreen(
+                                navController = navController,
+                                viewModel = historyViewModel
+                            )
+                        }
+
+                        // ───────────────────────────────
+                        // MAP ROUTE — NO PARAMETERS
+                        // (Fix for previous crash)
+                        // ───────────────────────────────
+                        composable("map") {
+                            DistributionMapScreen(navController = navController)
+                        }
+
+                        // ───────────────────────────────
+                        // IMAGE PREVIEW
+                        // ───────────────────────────────
+                        composable(
+                            "preview/{imageUri}/{lat}/{lon}",
                             arguments = listOf(
                                 navArgument("imageUri") { type = NavType.StringType },
                                 navArgument("lat") { type = NavType.FloatType },
                                 navArgument("lon") { type = NavType.FloatType }
                             )
-                        ) { backStackEntry ->
-
-                            val imageUriStr = backStackEntry.arguments?.getString("imageUri")
-                            val decodedUri = Uri.parse(imageUriStr ?: "")
-
-                            val lat = backStackEntry.arguments?.getFloat("lat")?.toDouble()
-                            val lon = backStackEntry.arguments?.getFloat("lon")?.toDouble()
-
-                            val historyViewModel: CapturedHistoryViewModel = viewModel()
+                        ) { backStack ->
+                            val imageUri = Uri.parse(backStack.arguments?.getString("imageUri") ?: "")
+                            val lat = backStack.arguments?.getFloat("lat")?.toDouble()
+                            val lon = backStack.arguments?.getFloat("lon")?.toDouble()
 
                             ImagePreviewScreen(
                                 navController = navController,
-                                imageUri = decodedUri,
+                                imageUri = imageUri,
                                 latitude = lat,
                                 longitude = lon,
                                 viewModel = historyViewModel
                             )
                         }
 
-
-
-
-
-
+                        // ───────────────────────────────
+                        // RESULT SCREEN
+                        // ───────────────────────────────
                         composable(
-                            route = "resultScreen/{frogId}",
-                            arguments = listOf(
-                                navArgument("frogId") { type = NavType.StringType }
-                            )
-                        ) { backStackEntry ->
-                            val frogId = backStackEntry.arguments?.getString("frogId")?.toLongOrNull()
-                            if (frogId != null) {
+                            "resultScreen/{frogId}",
+                            listOf(navArgument("frogId") { type = NavType.StringType })
+                        ) { entry ->
+                            val idLong = entry.arguments?.getString("frogId")?.toLongOrNull()
+                            if (idLong != null) {
                                 ResultScreen(
                                     navController = navController,
-                                    frogId = frogId,
+                                    frogId = idLong,
                                     viewModel = historyViewModel
                                 )
                             }
                         }
+
                     }
                 }
             }

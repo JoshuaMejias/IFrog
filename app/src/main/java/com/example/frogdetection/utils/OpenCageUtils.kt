@@ -1,9 +1,8 @@
+// File: app/src/main/java/com/example/frogdetection/utils/OpenCageUtils.kt
 package com.example.frogdetection.utils
 
 import android.content.Context
 import android.util.Log
-import com.example.frogdetection.data.CapturedFrogDatabase
-import com.example.frogdetection.model.LocationCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -13,7 +12,7 @@ import java.net.URLEncoder
 
 /**
  * Returns a human-readable location (Barangay → City → Province → Country)
- * using OpenCage API, with Room-based local caching.
+ * using OpenCage API — NO caching, fully clean.
  */
 suspend fun getReadableLocationFromOpenCage(
     context: Context,
@@ -21,21 +20,8 @@ suspend fun getReadableLocationFromOpenCage(
     longitude: Double,
     apiKey: String
 ): String = withContext(Dispatchers.IO) {
+
     try {
-        // ✅ Cache key (rounded coordinates)
-        val key = "%.4f,%.4f".format(latitude, longitude)
-
-        // ✅ Access local cache first
-        val db = CapturedFrogDatabase.getDatabase(context)
-        val cacheDao = db.locationCacheDao()
-
-        val cached = cacheDao.getCachedLocation(key)
-        if (cached != null) {
-            Log.d("OpenCage", "Cache hit for $key → $cached")
-            return@withContext cached
-        }
-
-        // ✅ Build request to OpenCage API
         val query = URLEncoder.encode("$latitude,$longitude", "UTF-8")
         val urlStr = "https://api.opencagedata.com/geocode/v1/json?q=$query&key=$apiKey&language=en"
 
@@ -49,33 +35,27 @@ suspend fun getReadableLocationFromOpenCage(
 
         val json = JSONObject(response)
         val results = json.getJSONArray("results")
-        if (results.length() == 0) {
-            Log.w("OpenCage", "No results for $latitude, $longitude")
-            return@withContext "Unknown Location"
-        }
+        if (results.length() == 0) return@withContext "Unknown Location"
 
-        // ✅ Parse readable address
         val components = results.getJSONObject(0).getJSONObject("components")
+
         val barangay = components.optString("suburb")
             .ifEmpty { components.optString("village") }
             .ifEmpty { components.optString("neighbourhood") }
+
         val city = components.optString("city")
             .ifEmpty { components.optString("town") }
             .ifEmpty { components.optString("municipality") }
+
         val province = components.optString("state")
             .ifEmpty { components.optString("region") }
+
         val country = components.optString("country")
 
-        val readableName = listOf(barangay, city, province, country)
+        return@withContext listOf(barangay, city, province, country)
             .filter { it.isNotBlank() }
             .joinToString(", ")
             .ifEmpty { results.getJSONObject(0).optString("formatted", "Unknown Location") }
-
-        // ✅ Save to cache
-        cacheDao.insert(LocationCache(cacheKey = key, locationName = readableName))
-
-        Log.d("OpenCage", "Fetched from API: $readableName")
-        return@withContext readableName
 
     } catch (e: Exception) {
         Log.e("OpenCage", "Error: ${e.message}")

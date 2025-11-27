@@ -28,7 +28,7 @@ class FrogDetectorONNX(
         private const val INPUT_NAME = "images"
         private const val INPUT_SIZE = 640
         private const val CHANNELS = 10
-        private const val CONF_THRESHOLD = 0.25f
+        private const val CONF_THRESHOLD = 0.5f
         private const val IOU_THRESHOLD = 0.45f
     }
 
