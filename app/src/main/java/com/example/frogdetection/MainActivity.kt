@@ -79,10 +79,7 @@ class MainActivity : ComponentActivity() {
                         // HISTORY
                         // ───────────────────────────────
                         composable("history") {
-                            CapturedHistoryScreen(
-                                navController = navController,
-                                viewModel = historyViewModel
-                            )
+                            CapturedHistoryScreen(navController)
                         }
 
                         // ───────────────────────────────
@@ -122,14 +119,13 @@ class MainActivity : ComponentActivity() {
                         // ───────────────────────────────
                         composable(
                             "resultScreen/{frogId}",
-                            listOf(navArgument("frogId") { type = NavType.StringType })
+                            arguments = listOf(navArgument("frogId") { type = NavType.LongType })
                         ) { entry ->
-                            val idLong = entry.arguments?.getString("frogId")?.toLongOrNull()
-                            if (idLong != null) {
+                            val frogId = entry.arguments?.getLong("frogId")
+                            if (frogId != null) {
                                 ResultScreen(
                                     navController = navController,
-                                    frogId = idLong,
-                                    viewModel = historyViewModel
+                                    frogId = frogId.toInt()   // OR pass Long if ResultScreen updated
                                 )
                             }
                         }

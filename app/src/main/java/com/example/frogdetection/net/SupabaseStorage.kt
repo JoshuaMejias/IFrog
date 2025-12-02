@@ -3,52 +3,60 @@ package com.example.frogdetection.net
 import android.content.Context
 import android.net.Uri
 import android.util.Log
-import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
 class SupabaseStorage(
     private val supabaseUrl: String,
     private val supabaseKey: String,
-    private val bucket: String = "frog-images"
+    private val bucket: String
 ) {
 
     private val client = OkHttpClient()
 
-    /**
-     * Upload an image to Supabase Storage
-     */
-    @Throws(IOException::class)
-    fun uploadImage(context: Context, uri: Uri, fileName: String): String {
-
+    suspend fun uploadImage(context: Context, uri: Uri, fileName: String): String {
         val inputStream = context.contentResolver.openInputStream(uri)
-            ?: throw IOException("Cannot open URI $uri")
+            ?: throw IOException("Failed to open file stream")
 
-        val bytes = inputStream.readBytes()
-        inputStream.close()
+        return try {
+            val bytes = inputStream.readBytes()
+            val mediaType = "image/jpeg".toMediaType()
+            val body: RequestBody = bytes.toRequestBody(mediaType)
 
-        val url = "$supabaseUrl/storage/v1/object/$bucket/$fileName"
+            // Correct PUT URL for Supabase Storage
+            val uploadUrl =
+                "$supabaseUrl/storage/v1/object/$bucket/$fileName"
 
-        val body = bytes.toRequestBody("image/jpeg".toMediaType())
+            val request = Request.Builder()
+                .url(uploadUrl)
+                .header("Authorization", "Bearer $supabaseKey")
+                .header("apikey", supabaseKey)
+                .put(body)
+                .build()
 
-        val req = Request.Builder()
-            .url(url)
-            .post(body)
-            .addHeader("Authorization", "Bearer $supabaseKey")
-            .addHeader("apikey", supabaseKey)
-            .build()
+            val response = client.newCall(request).execute()
 
-        val res = client.newCall(req).execute()
-        if (!res.isSuccessful) {
-            val err = res.body?.string()
-            Log.e("SupabaseStorage", "Upload failed: $err")
-            res.close()
-            throw IOException("Upload failed: ${res.code}")
+            val responseText = response.body?.string()
+
+            if (!response.isSuccessful) {
+                Log.e("SupabaseStorage", "Upload failed: $responseText")
+                throw IOException("Upload failed: HTTP ${response.code}")
+            }
+
+            // Return public URL
+            "$supabaseUrl/storage/v1/object/public/$bucket/$fileName"
+
+        } catch (e: Exception) {
+            Log.e("SupabaseStorage", "Upload failed: ${e.message}", e)
+            throw e
+        } finally {
+            try {
+                inputStream.close()
+            } catch (_: Exception) {}
         }
-        res.close()
-
-        // Return *public* URL
-        return "$supabaseUrl/storage/v1/object/public/$bucket/$fileName"
     }
 }

@@ -1,157 +1,153 @@
+// File: app/src/main/java/com/example/frogdetection/screens/ResultScreen.kt
 package com.example.frogdetection.screens
 
 import android.net.Uri
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavController
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import coil.compose.rememberAsyncImagePainter
 import com.example.frogdetection.model.CapturedFrog
+import com.example.frogdetection.utils.classifyEdibility
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
+import com.example.frogdetection.data.MapFocusStore
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
 @Composable
 fun ResultScreen(
-    navController: NavController,
-    frogId: Long,
-    viewModel: CapturedHistoryViewModel
+    navController: androidx.navigation.NavController,
+    frogId: Int
 ) {
-    var frog by remember { mutableStateOf<CapturedFrog?>(null) }
+    val context = LocalContext.current
+    val owner = LocalViewModelStoreOwner.current!!
+    val viewModel = ViewModelProvider(
+        owner,
+        ViewModelProvider.AndroidViewModelFactory(context.applicationContext as android.app.Application)
+    )[CapturedHistoryViewModel::class.java]
 
-    // Load frog entry from DB
+    val scope = rememberCoroutineScope()
+
+    var frog by remember { mutableStateOf<CapturedFrog?>(null) }
+    val scroll = rememberScrollState()
+
     LaunchedEffect(frogId) {
-        frog = viewModel.getFrogById(frogId.toInt())
+        frog = viewModel.getFrogById(frogId)
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                    colors = listOf(Color(0xFFE6FFE6), Color(0xFFB9FBB9))
-                )
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        if (frog == null) {
-            CircularProgressIndicator(color = Color(0xFF4CAF50))
-        } else {
-            val captured = frog!!
+    if (frog == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
+    val f = frog!!
+    val edibility = classifyEdibility(f.speciesName)
 
-                // Image preview
-                Image(
-                    painter = rememberAsyncImagePainter(Uri.parse(captured.imageUri)),
-                    contentDescription = captured.speciesName,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(280.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Color(0xFFEFEFEF))
-                )
-
-                Spacer(Modifier.height(16.dp))
-
-                // Species name
-                Text(
-                    text = captured.speciesName.ifBlank { "Unknown Species" },
-                    style = MaterialTheme.typography.headlineSmall.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFF2D7A2F)
-                    ),
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(Modifier.height(8.dp))
-
-                // Confidence score (0..1)
-                val confidenceText =
-                    "Confidence: ${(captured.score * 100).toInt()}%"
-
-                Text(
-                    text = confidenceText,
-                    style = MaterialTheme.typography.bodyMedium.copy(color = Color(0xFF444444))
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                // Location
-                val locationText = when {
-                    !captured.locationName.isNullOrBlank() -> captured.locationName!!
-                    captured.latitude != null && captured.longitude != null ->
-                        "Lat: %.5f\nLon: %.5f".format(captured.latitude, captured.longitude)
-                    else -> "Unknown Location"
+    Scaffold(
+        floatingActionButton = {
+            Row(Modifier.padding(end = 16.dp)) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val ok = viewModel.uploadFrogToCloud(f)
+                            if (ok) {
+                                MapFocusStore.focusLat = f.latitude
+                                MapFocusStore.focusLon = f.longitude
+                                MapFocusStore.focusId = f.id  // NEW: tell map which marker to focus
+                                navController.navigate("map")
+                            }
+                        }
+                    },
+                    enabled = !f.uploaded,
+                    shape = RoundedCornerShape(50),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+                ) {
+                    Icon(Icons.Default.CloudUpload, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Upload")
                 }
 
-                Text(
-                    text = locationText,
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        color = Color(0xFF444444)
-                    ),
-                    textAlign = TextAlign.Center
-                )
+                Spacer(Modifier.width(12.dp))
 
-                Spacer(Modifier.height(12.dp))
-
-                // Timestamp
-                val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                    .format(Date(captured.timestamp))
-
-                Text(
-                    text = "Captured on: $dateStr",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        color = Color(0xFF666666)
-                    )
-                )
-
-                Spacer(Modifier.height(24.dp))
-
-                // Buttons: Home, History, Show on Map
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Button(
+                    onClick = {
+                        MapFocusStore.focusLat = f.latitude
+                        MapFocusStore.focusLon = f.longitude
+                        MapFocusStore.focusId = f.remoteId
+                        navController.navigate("map")
+                    },
+                    enabled = f.uploaded,
+                    shape = RoundedCornerShape(50),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
                 ) {
-
-                    Button(
-                        onClick = { navController.navigate("home") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA8F0A8))
-                    ) {
-                        Text("Home", color = Color(0xFF005500))
-                    }
-
-                    Button(
-                        onClick = { navController.navigate("history") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
-                    ) {
-                        Text("History", color = Color.White)
-                    }
-
-                    Button(
-                        onClick = { navController.navigate("map") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4DB6AC))
-                    ) {
-                        Text("Show on Map", color = Color.White)
-                    }
+                    Icon(Icons.Default.Place, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("View on Map")
                 }
             }
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .verticalScroll(scroll)
+                .padding(20.dp)
+        ) {
+            Image(
+                painter = rememberAsyncImagePainter(Uri.parse(f.imageUri)),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(340.dp)
+                    .clip(RectangleShape)
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            SuggestionChip(
+                onClick = {},
+                label = { Text("${edibility.emoji} ${edibility.label}") },
+                colors = SuggestionChipDefaults.suggestionChipColors(containerColor = edibility.color)
+            )
+
+            Spacer(Modifier.height(20.dp))
+            Text("Species: ${f.speciesName}", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            Text("Confidence: ${(f.score * 100).toInt()}%")
+            Spacer(Modifier.height(6.dp))
+            Text("Location: ${f.locationName ?: "Unknown"}")
+            Spacer(Modifier.height(6.dp))
+            Text("Latitude: %.5f".format(f.latitude))
+            Text("Longitude: %.5f".format(f.longitude))
+            Spacer(Modifier.height(6.dp))
+            val ts = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(f.timestamp))
+            Text("Captured: $ts")
+            Spacer(Modifier.height(20.dp))
+            if (f.uploaded) {
+                Text("Already uploaded to map ✔", color = MaterialTheme.colorScheme.primary)
+            } else {
+                Text("Not uploaded to map", color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(100.dp))
         }
     }
 }

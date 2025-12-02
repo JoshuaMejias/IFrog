@@ -1,297 +1,544 @@
 // File: app/src/main/java/com/example/frogdetection/screens/DistributionMapScreen.kt
 package com.example.frogdetection.screens
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
+import android.content.Context
+import android.graphics.*
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
-import android.net.Uri
+import android.util.Log
+import androidx.appcompat.content.res.AppCompatResources
+import androidx.core.graphics.drawable.DrawableCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import androidx.navigation.NavController
 import com.example.frogdetection.R
+import com.example.frogdetection.data.MapFocusStore
 import com.example.frogdetection.net.SupabaseService
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONArray
+import kotlinx.coroutines.*
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
-import java.text.SimpleDateFormat
-import java.util.*
+import org.osmdroid.views.overlay.Overlay
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.max
 
+// -------------------------------
+// Data
+// -------------------------------
+data class OnlineFrog(
+    val id: Int,
+    val species: String,
+    val locationName: String?,
+    val timestamp: Long,
+    val lat: Double,
+    val lon: Double,
+    val imageUrl: String?
+)
 
-/**
- * Minimal online-only Distribution Map screen:
- * - Manual "Refresh" button
- * - Queries SupabaseService.queryDetections(south,north,west,east)
- * - Shows simple colored vector pin icons (from drawable resources)
- * - Simple popup card when a marker is tapped
- */
+// -------------------------------
+// Drawable helpers
+// -------------------------------
+fun drawableToBitmapDrawableSafe(context: Context, drawable: Drawable, fallbackPx: Int = 96): BitmapDrawable {
+    val wrapped = DrawableCompat.wrap(drawable).mutate()
+    try {
+        DrawableCompat.setTintList(wrapped, null)
+        wrapped.clearColorFilter()
+    } catch (_: Throwable) {}
+    val w = wrapped.intrinsicWidth.takeIf { it > 0 } ?: fallbackPx
+    val h = wrapped.intrinsicHeight.takeIf { it > 0 } ?: fallbackPx
+    wrapped.setBounds(0, 0, w, h)
+    val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    wrapped.draw(canvas)
+    return BitmapDrawable(context.resources, bitmap).apply {
+        setBounds(0, 0, w, h)
+        setTargetDensity(context.resources.displayMetrics)
+    }
+}
 
-@Composable
-fun DistributionMapScreen(
-    navController: NavController,
-    supabaseUrl: String = "https://pdfcvwuketwptqtnjhbc.supabase.co",
-    supabaseKey: String = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBkZmN2d3VrZXR3cHRxdG5qaGJjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwNjMxOTQsImV4cCI6MjA3OTYzOTE5NH0.SOA5H2A6iCzFgPX-rNG9u6KmRZUXEmDJWSk7v_bZujY" // replace or inject from BuildConfig/resources
+fun scaleBitmapDrawable(context: Context, src: BitmapDrawable, scale: Float): BitmapDrawable {
+    val bmp = src.bitmap
+    val newW = (bmp.width * scale).toInt().coerceAtLeast(1)
+    val newH = (bmp.height * scale).toInt().coerceAtLeast(1)
+    val scaled = Bitmap.createScaledBitmap(bmp, newW, newH, true)
+    return BitmapDrawable(context.resources, scaled).apply {
+        setBounds(0, 0, newW, newH)
+        setTargetDensity(context.resources.displayMetrics)
+    }
+}
+
+fun addStrokeToBitmapDrawable(
+    context: Context,
+    drawable: BitmapDrawable,
+    strokePx: Int = 6,
+    strokeColor: Int = android.graphics.Color.BLACK
+): BitmapDrawable {
+    val src = drawable.bitmap
+    val w = src.width
+    val h = src.height
+    val outW = w + strokePx * 2
+    val outH = h + strokePx * 2
+    val outBitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(outBitmap)
+    canvas.drawBitmap(src, strokePx.toFloat(), strokePx.toFloat(), null)
+    val paint = Paint().apply {
+        color = strokeColor
+        style = Paint.Style.STROKE
+        strokeWidth = strokePx.toFloat()
+        isAntiAlias = true
+    }
+    val cx = outW / 2f
+    val cy = outH * 0.42f
+    val radius = max(w, h) * 0.32f + strokePx
+    canvas.drawCircle(cx, cy, radius, paint)
+    return BitmapDrawable(context.resources, outBitmap).apply {
+        setBounds(0, 0, outW, outH)
+        setTargetDensity(context.resources.displayMetrics)
+    }
+}
+
+// -------------------------------
+// PopOverlay — draws scaled marker image at geo point (guaranteed visible)
+// -------------------------------
+class PopOverlay(
+    private val context: Context
+) : Overlay() {
+    private var center: GeoPoint? = null
+    private var bmp: Bitmap? = null
+    private var scale = 1f
+    private var visible = false
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var job: Job? = null
+
+    fun startOnce(map: MapView, point: GeoPoint, baseBmp: Bitmap, scope: CoroutineScope) {
+        center = point
+        bmp = baseBmp
+        job?.cancel()
+        visible = true
+        job = scope.launch(Dispatchers.Main) {
+            // sequence like pop: 1 -> 1.35 -> 0.85 -> 1
+            val seq = floatArrayOf(1f, 1.35f, 0.85f, 1f)
+            for (s in seq) {
+                scale = s
+                map.invalidate()
+                delay(80L)
+            }
+            // linger a touch
+            delay(120L)
+            visible = false
+            center = null
+            map.invalidate()
+        }
+    }
+
+    override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
+        if (!visible) return
+        val c = center ?: return
+        val bmpLocal = bmp ?: return
+        val pt = mapView.projection.toPixels(c, null)
+        val w = (bmpLocal.width * scale).toInt()
+        val h = (bmpLocal.height * scale).toInt()
+        val left = pt.x - w / 2
+        val top = (pt.y - h).toInt() - (h / 6) // small uplift for pointer look
+        // optional drop shadow
+        paint.setShadowLayer(8f, 0f, 3f, android.graphics.Color.argb(80, 0, 0, 0))
+        canvas.drawBitmap(Bitmap.createScaledBitmap(bmpLocal, w, h, true), left.toFloat(), top.toFloat(), paint)
+        paint.clearShadowLayer()
+    }
+
+    fun cancel() {
+        job?.cancel()
+        job = null
+        visible = false
+        center = null
+        bmp = null
+    }
+}
+
+// -------------------------------
+// RippleOverlay (radiating rings) — soft eye-pleasing color
+// -------------------------------
+class RippleOverlay(private val context: Context) : Overlay() {
+    private var center: GeoPoint? = null
+    private var ringRadius = 0f
+    private var alpha = 180
+    private var job: Job? = null
+    private val paint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = 6f
+        color = android.graphics.Color.parseColor("#66A8E6CF") // soft pastel
+    }
+
+    fun start(map: MapView, point: GeoPoint, scope: CoroutineScope) {
+        center = point
+        job?.cancel()
+        job = scope.launch(Dispatchers.Main) {
+            val maxR = 220f
+            repeat(20) {
+                ringRadius += maxR / 12f
+                alpha = (200 * (1f - it / 20f)).toInt().coerceAtLeast(20)
+                paint.alpha = alpha
+                map.invalidate()
+                delay(40L)
+            }
+            center = null
+            ringRadius = 0f
+            paint.alpha = 180
+            map.invalidate()
+        }
+    }
+
+    override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
+        val c = center ?: return
+        val pt = mapView.projection.toPixels(c, null)
+        canvas.drawCircle(pt.x.toFloat(), pt.y.toFloat(), ringRadius, paint)
+    }
+
+    fun cancel() {
+        job?.cancel()
+        job = null
+        center = null
+        ringRadius = 0f
+    }
+}
+
+// -------------------------------
+// Marker animation attempt (OSMDroid route) — may work on some devices
+// -------------------------------
+suspend fun markerPopAttempt(context: Context, marker: Marker, mapView: MapView) {
+    withContext(Dispatchers.Main) {
+        val base = marker.icon as? BitmapDrawable ?: return@withContext
+        val stroked = addStrokeToBitmapDrawable(context, base, 6)
+        val seq = floatArrayOf(1f, 1.35f, 0.85f, 1f)
+        for (s in seq) {
+            val scaled = scaleBitmapDrawable(context, stroked, s)
+            marker.setIcon(scaled)
+            marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            // force layout recompute & redraw
+            marker.setPosition(marker.position)
+            mapView.invalidate()
+            delay(80L)
+        }
+        marker.setIcon(stroked)
+        marker.setPosition(marker.position)
+        mapView.invalidate()
+    }
+}
+
+// -------------------------------
+// Combined sequence using both overlay pop + ripple + marker attempt
+// -------------------------------
+suspend fun runCombinedPop(
+    mapView: MapView,
+    marker: Marker,
+    lat: Double,
+    lon: Double,
+    context: Context,
+    scope: CoroutineScope,
+    popOverlay: PopOverlay,
+    rippleOverlay: RippleOverlay
 ) {
+    withContext(Dispatchers.Main) {
+        val point = GeoPoint(lat, lon)
+
+        // Prepare base bitmap for overlay pop (use marker.icon bitmap)
+        val baseBmp = (marker.icon as? BitmapDrawable)?.bitmap
+            ?: return@withContext
+
+        // Add overlays above markers so they are visible
+        try {
+            mapView.overlays.add(popOverlay)
+            mapView.overlays.add(rippleOverlay)
+        } catch (_: Exception) { }
+
+        popOverlay.startOnce(mapView, point, baseBmp, scope)
+        rippleOverlay.start(mapView, point, scope)
+
+        // Start marker attempt in parallel (may show stroke on some devices)
+        scope.launch {
+            markerPopAttempt(context, marker, mapView)
+        }
+
+        // wait for overlays/animations to finish (safe margin)
+        delay(900L)
+
+        // cleanup
+        try {
+            mapView.overlays.remove(popOverlay)
+            mapView.overlays.remove(rippleOverlay)
+        } catch (_: Exception) { }
+
+        mapView.invalidate()
+    }
+}
+
+// -------------------------------
+// Main Composable
+// -------------------------------
+@Composable
+fun DistributionMapScreen(navController: androidx.navigation.NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // MapView reference
-    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
-
-    // Selected online frog for popup
-    var selected by remember { mutableStateOf<OnlineFrog?>(null) }
-
-    // Loading state for network fetch
-    var loading by remember { mutableStateOf(false) }
-    var errorMsg by remember { mutableStateOf<String?>(null) }
-
-    // Instantiate SupabaseService (uses OkHttp in your project)
-    val supabaseService = remember {
-        SupabaseService(
-            supabaseUrl = supabaseUrl,
-            supabaseKey = supabaseKey,
-            tableName = "frog_records"
-        )
-    }
-
-    // species -> drawable mapping (match your drawable filenames)
-    val speciesIconMap = mapOf(
-        "Asian Painted Frog" to R.drawable.ic_pin_blue,
-        "Cane Toad" to R.drawable.ic_pin_red,
-        "Common Southeast Asian Tree Frog" to R.drawable.ic_pin_green,
-        "East Asian Bullfrog" to R.drawable.ic_pin_yellow,
-        "Paddy Field Frog" to R.drawable.ic_pin_purple,
-        "Wood Frog" to R.drawable.ic_pin_orange
+    val service = SupabaseService(
+        context.getString(R.string.supabase_url),
+        context.getString(R.string.supabase_anon_key),
+        "frog_detections"
     )
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    var map by remember { mutableStateOf<MapView?>(null) }
+    var frogs by remember { mutableStateOf<List<OnlineFrog>>(emptyList()) }
 
+    val speciesList = listOf(
+        "Asian Painted Frog",
+        "Cane Toad",
+        "Common Southeast Asian Tree Frog",
+        "East Asian Bullfrog",
+        "Paddy Field Frog",
+        "Wood Frog"
+    )
+
+    var filterExpanded by remember { mutableStateOf(false) }
+    var activeFilters by remember { mutableStateOf(speciesList.toSet()) }
+
+    val speciesColors = mapOf(
+        "Asian Painted Frog" to R.drawable.ic_pin_blue,
+        "Cane Toad" to R.drawable.ic_pin_red,
+        "Common Southeast Asian Tree Frog" to R.drawable.ic_pin_orange,
+        "East Asian Bullfrog" to R.drawable.ic_pin_yellow,
+        "Paddy Field Frog" to R.drawable.ic_pin_green,
+        "Wood Frog" to R.drawable.ic_pin_purple
+    )
+
+    val markersById = remember { ConcurrentHashMap<Int, Marker>() }
+
+    // overlays instances (created when MapView available)
+    var popOverlay by remember { mutableStateOf<PopOverlay?>(null) }
+    var rippleOverlay by remember { mutableStateOf<RippleOverlay?>(null) }
+
+    fun refreshAll() {
+        scope.launch {
+            val json = service.queryDetectionsAll()
+            frogs = List(json.length()) { i ->
+                val o = json.getJSONObject(i)
+                OnlineFrog(
+                    id = o.getInt("id"),
+                    species = o.getString("species"),
+                    locationName = o.optString("location_name"),
+                    timestamp = o.optLong("timestamp"),
+                    lat = o.getDouble("latitude"),
+                    lon = o.getDouble("longitude"),
+                    imageUrl = o.optString("image_url")
+                )
+            }
+            Log.d("MAP", "Fetched ${frogs.size} frogs from Supabase")
+            map?.let { addMarkers(it, context, frogs, activeFilters, speciesColors, markersById) }
+        }
+    }
+
+    LaunchedEffect(Unit) { refreshAll() }
+
+    Box(Modifier.fillMaxSize()) {
         AndroidView(
             factory = { ctx ->
                 MapView(ctx).apply {
                     setTileSource(TileSourceFactory.MAPNIK)
                     setMultiTouchControls(true)
-                    controller.setZoom(11)  // GOOD level for Bohol province
-                    controller.setCenter(GeoPoint(9.84999, 124.14354))  // Tagbilaran City center
+                    controller.setZoom(12.0)
+                    controller.setCenter(GeoPoint(9.85, 124.14))
 
-                    mapViewRef = this
+                    // create overlay instances (not added yet)
+                    popOverlay = PopOverlay(ctx)
+                    rippleOverlay = RippleOverlay(ctx)
+
+                    map = this
                 }
             },
-            update = { mv ->
-                // keep reference updated
-                mapViewRef = mv
+            update = {
+                map = it
+                addMarkers(it, context, frogs, activeFilters, speciesColors, markersById)
             },
             modifier = Modifier.fillMaxSize()
         )
 
-        // Floating refresh button (top-right)
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.Top
+        // Top controls (filter + refresh)
+        Row(
+            Modifier.padding(12.dp).align(Alignment.TopStart),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            ExtendedFloatingActionButton(
-                onClick = {
-                    errorMsg = null
-                    loading = true
-                    // Run fetch in coroutine
-                    scope.launch {
-                        val mv = mapViewRef
-                        if (mv == null) {
-                            errorMsg = "Map not ready"
-                            loading = false
-                            return@launch
-                        }
+            IconButton(
+                onClick = { filterExpanded = !filterExpanded },
+                modifier = Modifier.size(55.dp).clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+            ) { Icon(Icons.Default.FilterList, null) }
 
-                        // get bounding box from map view
-                        val bb: BoundingBox = mv.boundingBox
-                        // bounding box provides latNorth/latSouth/lonEast/lonWest
-                        val south = bb.latSouth
-                        val north = bb.latNorth
-                        val west = bb.lonWest
-                        val east = bb.lonEast
+            IconButton(
+                onClick = { refreshAll() },
+                modifier = Modifier.size(55.dp).clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.tertiaryContainer)
+            ) { Icon(Icons.Default.Refresh, null) }
+        }
 
-                        try {
-                            val arr: JSONArray = withContext(Dispatchers.IO) {
-                                supabaseService.queryDetections(south, north, west, east, limit = 1000)
-                            }
-                            // Update markers on UI thread
-                            withContext(Dispatchers.Main) {
-                                // clear old markers (except tile overlays)
-                                mv.overlays.filterIsInstance<Marker>().forEach { mv.overlays.remove(it) }
-                                // parse and add markers
-                                for (i in 0 until arr.length()) {
-                                    val obj = arr.getJSONObject(i)
-                                    val lat = obj.optDouble("latitude", Double.NaN)
-                                    val lon = obj.optDouble("longitude", Double.NaN)
-                                    if (lat.isNaN() || lon.isNaN()) continue
-
-                                    val species = obj.optString("species_name", "Unknown")
-                                    val locationName = obj.optString("location_name", "")
-                                    val ts = obj.optLong("timestamp", 0L)
-                                    val imageUrl = obj.optString("image_url", "")
-
-                                    val geo = GeoPoint(lat, lon)
-                                    val marker = Marker(mv)
-                                    marker.position = geo
-                                    marker.title = species
-                                    marker.subDescription = locationName
-                                    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-
-                                    // Choose icon (fallback to default)
-                                    val drawableId = speciesIconMap[species] ?: R.drawable.ic_pin_green
-                                    val drawable = ContextCompat.getDrawable(context, drawableId)
-                                    drawable?.let {
-                                        marker.icon = drawableToBitmapDrawable(context, it)
-                                    }
-
-                                    marker.setOnMarkerClickListener { m, _ ->
-                                        selected = OnlineFrog(
-                                            id = obj.optInt("id", -1),
-                                            species = species,
-                                            locationName = locationName,
-                                            timestamp = ts,
-                                            latitude = lat,
-                                            longitude = lon,
-                                            imageUrl = imageUrl
-                                        )
-                                        true
-                                    }
-
-                                    mv.overlays.add(marker)
-                                }
-                                mv.invalidate()
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                            errorMsg = "Failed to load markers: ${e.message}"
-                        } finally {
-                            loading = false
+        // Filter panel
+        if (filterExpanded) {
+            Card(
+                shape = RoundedCornerShape(26.dp),
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 75.dp).width(260.dp)
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Filters", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    speciesList.forEach { species ->
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
+                                activeFilters = if (species in activeFilters) activeFilters - species else activeFilters + species
+                                map?.let { addMarkers(it, context, frogs, activeFilters, speciesColors, markersById) }
+                            }) {
+                            Checkbox(checked = species in activeFilters, onCheckedChange = {
+                                activeFilters = if (it) activeFilters + species else activeFilters - species
+                                map?.let { addMarkers(it, context, frogs, activeFilters, speciesColors, markersById) }
+                            })
+                            Text(species)
                         }
                     }
-                },
-                icon = { Icon(androidx.compose.material.icons.Icons.Default.Refresh, contentDescription = null) },
-                text = { Text("Refresh Markers") }
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (loading) {
-                Card(
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier
-                        .wrapContentWidth()
-                        .padding(4.dp)
-                ) {
-                    Text("Loading...", modifier = Modifier.padding(8.dp))
-                }
-            }
-
-            if (errorMsg != null) {
-                Card(
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier
-                        .wrapContentWidth()
-                        .padding(4.dp)
-                ) {
-                    Text("Error: $errorMsg", modifier = Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error)
                 }
             }
         }
 
-        // Popup card for selected marker
-        selected?.let { frog ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = 120.dp),
-                contentAlignment = Alignment.BottomCenter
-            ) {
-                Card(
-                    modifier = Modifier
-                        .padding(12.dp)
-                        .widthIn(min = 220.dp, max = 340.dp)
-                        .clickable {
-                            // navigate to details screen if desired
-                            // navController.navigate("resultScreen/${frog.id}")
-                        },
-                    elevation = CardDefaults.cardElevation(8.dp)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(frog.species, style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(6.dp))
-                        Text(frog.locationName.ifBlank { "Unknown location" }, style = MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.height(6.dp))
-                        val dateStr = if (frog.timestamp > 0) {
-                            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(frog.timestamp))
-                        } else "Unknown time"
-                        Text(dateStr, style = MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = {
-                                selected = null
-                            }) {
-                                Text("Close")
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Button(onClick = {
-                                // navigate to details
-                                selected = null
-                                // navController.navigate("resultScreen/${frog.id}")
-                            }) {
-                                Text("Details")
-                            }
-                        }
+        // Legend
+        LegendComposable(speciesList = speciesList, speciesColors = speciesColors,
+            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp))
+    }
+
+    // Focus handling: wait for marker then run combined pop + ripple
+    LaunchedEffect(frogs.size, map) {
+        val mv = map ?: return@LaunchedEffect
+        val id = MapFocusStore.focusId ?: return@LaunchedEffect
+        val lat = MapFocusStore.focusLat ?: return@LaunchedEffect
+        val lon = MapFocusStore.focusLon ?: return@LaunchedEffect
+
+        Log.d("FOCUS", "Requested focus id=$id lat=$lat lon=$lon")
+
+        // wait attempts
+        repeat(50) {
+            val marker = markersById[id]
+            if (marker != null) {
+                Log.d("FOCUS", "Found marker for id=$id — running combined animation")
+                val pop = popOverlay
+                val ripple = rippleOverlay
+                scope.launch {
+                    // center + zoom
+                    mv.controller.animateTo(GeoPoint(lat, lon))
+                    delay(150)
+                    mv.controller.setZoom(16.5)
+                    delay(120)
+
+                    // ensure marker draws last
+                    mv.overlays.remove(marker)
+                    mv.overlays.add(marker)
+                    mv.invalidate()
+
+                    if (pop != null && ripple != null) {
+                        runCombinedPop(
+                            mapView = mv,
+                            marker = marker,
+                            lat = lat,
+                            lon = lon,
+                            context = context,
+                            scope = scope,
+                            popOverlay = pop,
+                            rippleOverlay = ripple
+                        )
+                    } else {
+                        // fallback
+                        markerPopAttempt(context, marker, mv)
                     }
+                }
+                MapFocusStore.clear()
+                return@LaunchedEffect
+            }
+            delay(50L)
+        }
+
+        Log.e("FOCUS", "Marker not found for id=$id even after waiting.")
+    }
+}
+
+// Add markers
+fun addMarkers(
+    map: MapView,
+    context: Context,
+    frogs: List<OnlineFrog>,
+    filters: Set<String>,
+    speciesColors: Map<String, Int>,
+    markersById: ConcurrentHashMap<Int, Marker>
+) {
+    // remove only markers (keep overlays)
+    val toRemove = map.overlays.filterIsInstance<Marker>()
+    map.overlays.removeAll(toRemove)
+    markersById.clear()
+
+    frogs.filter { it.species in filters }.forEach { frog ->
+        val iconRes = speciesColors[frog.species] ?: R.drawable.ic_pin_blue
+        val raw = AppCompatResources.getDrawable(context, iconRes) ?: return@forEach
+        try { DrawableCompat.setTintList(raw, null); raw.clearColorFilter() } catch (_: Throwable) {}
+        val bmpDrawable = drawableToBitmapDrawableSafe(context, raw)
+        val marker = Marker(map).apply {
+            position = GeoPoint(frog.lat, frog.lon)
+            title = frog.species
+            setIcon(bmpDrawable)
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+        }
+        markersById[frog.id] = marker
+        map.overlays.add(marker)
+
+        val resName = try { context.resources.getResourceEntryName(iconRes) } catch (_: Exception) { "?" }
+        Log.d("MARKER", "Species='${frog.species}' id=${frog.id} resId=$iconRes resName=$resName bmp=${bmpDrawable.bitmap.width}x${bmpDrawable.bitmap.height}")
+    }
+
+    map.invalidate()
+}
+
+// Legend composable (unchanged)
+@Composable
+fun LegendComposable(
+    speciesList: List<String>,
+    speciesColors: Map<String, Int>,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+
+    Card(modifier = modifier.width(230.dp), shape = RoundedCornerShape(22.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Legend", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            speciesList.forEach { species ->
+                val iconRes = speciesColors[species] ?: return@forEach
+                val raw = AppCompatResources.getDrawable(context, iconRes) ?: return@forEach
+                try { DrawableCompat.setTintList(raw, null); raw.clearColorFilter() } catch (_: Throwable) {}
+                val bmp = drawableToBitmapDrawableSafe(context, raw).bitmap
+
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+                    Icon(bitmap = bmp.asImageBitmap(), contentDescription = null, tint = androidx.compose.ui.graphics.Color.Unspecified, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(species)
                 }
             }
         }
     }
-}
-
-/**
- * Simple data holder for online frog record returned from Supabase.
- */
-private data class OnlineFrog(
-    val id: Int,
-    val species: String,
-    val locationName: String,
-    val timestamp: Long,
-    val latitude: Double,
-    val longitude: Double,
-    val imageUrl: String
-)
-
-/**
- * Convert a Drawable (vector) into BitmapDrawable for osmdroid Marker.icon
- */
-private fun drawableToBitmapDrawable(context: android.content.Context, drawable: Drawable): BitmapDrawable {
-    if (drawable is BitmapDrawable) return drawable
-    val width = (drawable.intrinsicWidth.takeIf { it > 0 } ?: 48)
-    val height = (drawable.intrinsicHeight.takeIf { it > 0 } ?: 48)
-    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-    drawable.setBounds(0, 0, canvas.width, canvas.height)
-    drawable.draw(canvas)
-    return BitmapDrawable(context.resources, bitmap)
 }

@@ -107,7 +107,7 @@ dependencies {
     implementation("org.json:json:20230227") // or use Android's JSONObject which is available already
 
     implementation("androidx.preference:preference-ktx:1.2.1")
-
+    implementation("com.google.code.gson:gson:2.10.1")
 
     // ✅ Room with KSP (not kapt)
     implementation("androidx.room:room-runtime:2.6.1")

@@ -1,6 +1,7 @@
 package com.example.frogdetection.screens
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -30,17 +31,14 @@ import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import com.example.frogdetection.R
 import com.example.frogdetection.utils.processImage
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.isGranted
-import com.google.accompanist.permissions.rememberPermissionState
-import com.google.accompanist.permissions.shouldShowRationale
 import com.google.android.gms.location.*
+import com.google.android.gms.tasks.CancellationTokenSource
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 import java.io.File
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
 
-@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun HomeScreen(navController: NavController) {
     val context = LocalContext.current
@@ -50,69 +48,82 @@ fun HomeScreen(navController: NavController) {
         LocationServices.getFusedLocationProviderClient(context)
     }
 
-    val hasCamera = context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+    // Track permission state
+    var locationGranted by remember { mutableStateOf(false) }
 
-    // Permissions
-    val storagePermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-        Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-
-    val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
-    val storagePermissionState = rememberPermissionState(storagePermission)
-    val locationPermission = rememberPermissionState(Manifest.permission.ACCESS_FINE_LOCATION)
-
-    // Store captured photo URI
+    // CAMERA OUTPUT
     var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
-    // ---------------------------------------------------------
-    // Camera Launcher
-    // ---------------------------------------------------------
+    // -------------------------------------------------------
+    // REQUEST LOCATION PERMISSION (Required!)
+    // -------------------------------------------------------
+    val locationPermissionLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            locationGranted = granted
+            if (!granted) {
+                Toast.makeText(context, "Location is required to scan frogs.", Toast.LENGTH_LONG)
+                    .show()
+            }
+        }
+
+    // Ask permission on first load
+    LaunchedEffect(Unit) {
+        val perm = ActivityCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION
+        )
+        if (perm == PackageManager.PERMISSION_GRANTED)
+            locationGranted = true
+        else
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    // -------------------------------------------------------
+    // CAMERA LAUNCHER
+    // -------------------------------------------------------
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { success ->
-        if (success && cameraImageUri != null) {
-            scope.launch {
-                val loc = getAccurateLocation(context, fusedClient)
-                val lat = loc?.first ?: 0.0
-                val lon = loc?.second ?: 0.0
+        if (!success || cameraImageUri == null) return@rememberLauncherForActivityResult
 
-                processImage(context, navController, cameraImageUri!!, lat, lon)
-            }
+        scope.launch {
+            val (lat, lon) = getPreciseLocation(context, fusedClient)
+
+            processImage(
+                context,
+                navController,
+                cameraImageUri!!,
+                lat,
+                lon
+            )
         }
     }
 
-    // ---------------------------------------------------------
-    // Gallery Launcher
-    // ---------------------------------------------------------
+    // -------------------------------------------------------
+    // GALLERY LAUNCHER
+    // -------------------------------------------------------
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        uri?.let {
-            scope.launch {
-                val loc = getAccurateLocation(context, fusedClient)
-                val lat = loc?.first ?: 0.0
-                val lon = loc?.second ?: 0.0
+        uri ?: return@rememberLauncherForActivityResult
 
-                processImage(context, navController, it, lat, lon)
-            }
+        scope.launch {
+            val (lat, lon) = getPreciseLocation(context, fusedClient)
+
+            processImage(
+                context,
+                navController,
+                uri,
+                lat,
+                lon
+            )
         }
     }
 
-    // ---------------------------------------------------------
-    // Logo Floating Animation
-    // ---------------------------------------------------------
-    val infiniteTransition = rememberInfiniteTransition()
-    val scale by infiniteTransition.animateFloat(
-        initialValue = 0.95f,
-        targetValue = 1.05f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        )
-    )
-
-    // ---------------------------------------------------------
+    // -------------------------------------------------------
     // UI
-    // ---------------------------------------------------------
+    // -------------------------------------------------------
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -130,6 +141,17 @@ fun HomeScreen(navController: NavController) {
             verticalArrangement = Arrangement.Center
         ) {
 
+            // Logo Animation
+            val infiniteTransition = rememberInfiniteTransition()
+            val scale by infiniteTransition.animateFloat(
+                initialValue = 0.95f,
+                targetValue = 1.05f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1500),
+                    repeatMode = RepeatMode.Reverse
+                )
+            )
+
             Image(
                 painter = painterResource(id = R.drawable.ifrog_logo),
                 contentDescription = "iFrog Logo",
@@ -141,7 +163,7 @@ fun HomeScreen(navController: NavController) {
             Spacer(Modifier.height(12.dp))
 
             Text(
-                "Scan a frog to check if it's safe to eat!",
+                text = "Scan a frog to check if it is edible",
                 color = Color(0xFF006400),
                 fontSize = 18.sp,
                 textAlign = TextAlign.Center
@@ -156,7 +178,7 @@ fun HomeScreen(navController: NavController) {
                 colors = CardDefaults.cardColors(containerColor = Color(0xFFDFFFD9))
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    Modifier.padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
 
@@ -173,69 +195,62 @@ fun HomeScreen(navController: NavController) {
                         modifier = Modifier.fillMaxWidth()
                     ) {
 
-                        // ---------------------------------------------------------
-                        // Camera Button
-                        // ---------------------------------------------------------
+                        // -------------------------------
+                        // CAMERA BUTTON
+                        // -------------------------------
                         FilledTonalButton(
                             onClick = {
-                                when {
-                                    !hasCamera -> {
-                                        Toast.makeText(context, "No camera available", Toast.LENGTH_SHORT).show()
-                                    }
-
-                                    cameraPermission.status.isGranted -> {
-                                        val file = File(
-                                            context.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
-                                            "frog_${System.currentTimeMillis()}.jpg"
-                                        )
-                                        val uri = FileProvider.getUriForFile(
-                                            context,
-                                            "${context.packageName}.provider",
-                                            file
-                                        )
-                                        cameraImageUri = uri
-                                        cameraLauncher.launch(uri)
-                                    }
-
-                                    cameraPermission.status.shouldShowRationale ->
-                                        Toast.makeText(context, "Camera permission needed", Toast.LENGTH_SHORT).show()
-
-                                    else -> cameraPermission.launchPermissionRequest()
+                                if (!locationGranted) {
+                                    locationPermissionLauncher.launch(
+                                        Manifest.permission.ACCESS_FINE_LOCATION
+                                    )
+                                    return@FilledTonalButton
                                 }
+
+                                val file = File(
+                                    context.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
+                                    "frog_${System.currentTimeMillis()}.jpg"
+                                )
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.provider",
+                                    file
+                                )
+                                cameraImageUri = uri
+                                cameraLauncher.launch(uri)
                             },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF90EE90))
                         ) {
                             Icon(
-                                painter = painterResource(android.R.drawable.ic_menu_camera),
-                                contentDescription = "Camera",
+                                painterResource(android.R.drawable.ic_menu_camera),
+                                contentDescription = null,
                                 tint = Color(0xFF006400)
                             )
                             Spacer(Modifier.width(8.dp))
                             Text("Camera", color = Color(0xFF006400))
                         }
 
-                        // ---------------------------------------------------------
-                        // Gallery Button
-                        // ---------------------------------------------------------
+                        // -------------------------------
+                        // GALLERY BUTTON
+                        // -------------------------------
                         FilledTonalButton(
                             onClick = {
-                                when {
-                                    storagePermissionState.status.isGranted ->
-                                        galleryLauncher.launch("image/*")
-
-                                    storagePermissionState.status.shouldShowRationale ->
-                                        Toast.makeText(context, "Gallery permission required", Toast.LENGTH_SHORT).show()
-
-                                    else -> storagePermissionState.launchPermissionRequest()
+                                if (!locationGranted) {
+                                    locationPermissionLauncher.launch(
+                                        Manifest.permission.ACCESS_FINE_LOCATION
+                                    )
+                                    return@FilledTonalButton
                                 }
+
+                                galleryLauncher.launch("image/*")
                             },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF90EE90))
                         ) {
                             Icon(
-                                painter = painterResource(android.R.drawable.ic_menu_gallery),
-                                contentDescription = "Gallery",
+                                painterResource(android.R.drawable.ic_menu_gallery),
+                                contentDescription = null,
                                 tint = Color(0xFF006400)
                             )
                             Spacer(Modifier.width(8.dp))
@@ -248,42 +263,43 @@ fun HomeScreen(navController: NavController) {
     }
 }
 
-// =============================================================================================
-// ACCURATE LOCATION FUNCTION
-// =============================================================================================
-suspend fun getAccurateLocation(
-    context: android.content.Context,
+/* ========================================================================================= */
+/*     HIGH ACCURACY LOCATION — FIXES 0.0 LAT & LON PERMANENTLY                             */
+/* ========================================================================================= */
+
+suspend fun getPreciseLocation(
+    context: Context,
     fused: FusedLocationProviderClient
-): Pair<Double, Double>? = suspendCancellableCoroutine { cont ->
+): Pair<Double, Double> = withContext(Dispatchers.IO) {
 
-    val hasPerm = ActivityCompat.checkSelfPermission(
-        context,
-        Manifest.permission.ACCESS_FINE_LOCATION
-    ) == PackageManager.PERMISSION_GRANTED
-
-    if (!hasPerm) {
-        cont.resume(null)
-        return@suspendCancellableCoroutine
+    val permission = ActivityCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION
+    )
+    if (permission != PackageManager.PERMISSION_GRANTED) {
+        return@withContext Pair(0.0, 0.0)
     }
 
-    // Try last known location first
-    fused.lastLocation
-        .addOnSuccessListener { last ->
-            if (last != null) {
-                cont.resume(Pair(last.latitude, last.longitude))
-            } else {
-                // Request fresh location
-                val token = com.google.android.gms.tasks.CancellationTokenSource()
-                fused.getCurrentLocation(
-                    Priority.PRIORITY_HIGH_ACCURACY,
-                    token.token
-                ).addOnSuccessListener { loc ->
-                    cont.resume(loc?.let { Pair(it.latitude, it.longitude) })
-                }.addOnFailureListener {
-                    cont.resume(null)
-                }
-                cont.invokeOnCancellation { token.cancel() }
-            }
+    try {
+        // 1️⃣ High accuracy request first
+        val token = CancellationTokenSource()
+        val loc = fused.getCurrentLocation(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            token.token
+        ).await()
+
+        if (loc != null) {
+            return@withContext Pair(loc.latitude, loc.longitude)
         }
-        .addOnFailureListener { cont.resume(null) }
+    } catch (_: Exception) { }
+
+    // 2️⃣ Fallback to last location
+    try {
+        val last = fused.lastLocation.await()
+        if (last != null) {
+            return@withContext Pair(last.latitude, last.longitude)
+        }
+    } catch (_: Exception) { }
+
+    // 3️⃣ Still nothing → 0.0 / 0.0 (rare)
+    return@withContext Pair(0.0, 0.0)
 }

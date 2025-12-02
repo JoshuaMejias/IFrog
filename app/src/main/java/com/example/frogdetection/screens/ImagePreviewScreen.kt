@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -16,21 +17,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
+import coil.compose.rememberAsyncImagePainter
 import com.example.frogdetection.ml.DetectionOverlay
 import com.example.frogdetection.model.CapturedFrog
+import com.example.frogdetection.model.DetectionStore
 import com.example.frogdetection.utils.FrogDetectionResult
 import com.example.frogdetection.utils.ImageUtils
+import com.example.frogdetection.utils.classifyEdibility
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.google.gson.Gson
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -40,7 +45,7 @@ fun ImagePreviewScreen(
     imageUri: Uri,
     latitude: Double?,
     longitude: Double?,
-    viewModel: CapturedHistoryViewModel = viewModel()
+    viewModel: CapturedHistoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -53,14 +58,13 @@ fun ImagePreviewScreen(
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     // ------------------------------------------------------------
-    // LOAD & ROTATE BITMAP
+    // Load & rotate image
     // ------------------------------------------------------------
     LaunchedEffect(imageUri) {
         detectDone = false
         bitmap = withContext(Dispatchers.IO) {
-            try {
-                ImageUtils.loadCorrectedBitmap(context, imageUri)
-            } catch (e: Exception) {
+            try { ImageUtils.loadCorrectedBitmap(context, imageUri) }
+            catch (e: Exception) {
                 errorMsg = "Unable to load image: ${e.message}"
                 null
             }
@@ -68,7 +72,7 @@ fun ImagePreviewScreen(
     }
 
     // ------------------------------------------------------------
-    // RUN DETECTOR
+    // Run detector
     // ------------------------------------------------------------
     LaunchedEffect(bitmap) {
         val bmp = bitmap ?: return@LaunchedEffect
@@ -81,6 +85,7 @@ fun ImagePreviewScreen(
 
                 detections = results
                 species = results.firstOrNull()?.label ?: "Unknown Species"
+
             } catch (e: Exception) {
                 errorMsg = "Detection failed: ${e.message}"
             }
@@ -89,38 +94,36 @@ fun ImagePreviewScreen(
     }
 
     // ------------------------------------------------------------
-    // REVERSE GEOCODING — OPTION 1 (instant inside screen)
+    // Reverse geocode
     // ------------------------------------------------------------
+    // Reverse geocode (OpenCage → Nominatim fallback)
     LaunchedEffect(latitude, longitude) {
         val lat = latitude ?: return@LaunchedEffect
         val lon = longitude ?: return@LaunchedEffect
+
         if (lat == 0.0 && lon == 0.0) return@LaunchedEffect
 
         scope.launch(Dispatchers.IO) {
-            val name = com.example.frogdetection.utils.getReadableLocationFromOpenCage(
+            val readable = com.example.frogdetection.utils.getReadableLocationFromOpenCage(
                 context = context,
                 latitude = lat,
                 longitude = lon,
                 apiKey = context.getString(com.example.frogdetection.R.string.opencage_api_key)
             )
-            locationName = name
+            locationName = readable
         }
     }
 
-    // ------------------------------------------------------------
-    // UI
-    // ------------------------------------------------------------
+
     val scroll = rememberScrollState()
 
     Scaffold(
         bottomBar = {
             if (detectDone) {
-                BottomAppBar(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ) {
+                BottomAppBar(containerColor = MaterialTheme.colorScheme.surface) {
+
                     Spacer(Modifier.weight(1f))
 
-                    // Cancel
                     TextButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.Default.Delete, contentDescription = null)
                         Spacer(Modifier.width(6.dp))
@@ -129,20 +132,39 @@ fun ImagePreviewScreen(
 
                     Spacer(Modifier.width(12.dp))
 
-                    // Save
                     Button(
                         onClick = {
+                            val gson = Gson()
+
+                            // Convert detection list → JSON
+                            val detectionStoreList = detections.map {
+                                DetectionStore(
+                                    species = it.label,
+                                    score = it.score,
+                                    left = it.box.left,
+                                    top = it.box.top,
+                                    right = it.box.right,
+                                    bottom = it.box.bottom
+                                )
+                            }
+
+                            val detectionsJson = gson.toJson(detectionStoreList)
+
+                            val top = detectionStoreList.maxByOrNull { it.score }
+
                             val frog = CapturedFrog(
                                 imageUri = imageUri.toString(),
-                                latitude = latitude,
-                                longitude = longitude,
-                                speciesName = species,
+                                latitude = latitude ?: 0.0,
+                                longitude = longitude ?: 0.0,
+                                speciesName = top?.species ?: "Unknown",
+                                score = top?.score ?: 0f,
+                                detectionsJson = detectionsJson,
                                 timestamp = System.currentTimeMillis(),
                                 locationName = locationName
                             )
 
-                            viewModel.insert(frog) {
-                                navController.navigate("history")
+                            viewModel.insert(frog) { newId ->
+                                navController.navigate("resultScreen/$newId")
                             }
                         }
                     ) {
@@ -156,6 +178,7 @@ fun ImagePreviewScreen(
             }
         }
     ) { padding ->
+
         Column(
             modifier = Modifier
                 .padding(padding)
@@ -164,7 +187,7 @@ fun ImagePreviewScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
 
-            // Header gradient
+            // Header
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -189,14 +212,33 @@ fun ImagePreviewScreen(
 
             Spacer(Modifier.height(16.dp))
 
-            // IMAGE
+            // ⭐ Edibility Badge
+            val edibility = classifyEdibility(species)
+
+            SuggestionChip(
+                onClick = {},
+                label = {
+                    Text(
+                        "${edibility.emoji} ${edibility.label}",
+                        color = Color.White
+                    )
+                },
+                colors = SuggestionChipDefaults.suggestionChipColors(
+                    containerColor = edibility.color
+                ),
+                modifier = Modifier
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 10.dp)
+            )
+
+            // Image + Boxes
             val bmp = bitmap
             if (bmp != null) {
                 Box(
                     modifier = Modifier
                         .padding(horizontal = 20.dp)
                         .height(400.dp)
-                        .clip(MaterialTheme.shapes.medium)
+                        .clip(RoundedCornerShape(16.dp))
                 ) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
@@ -215,7 +257,29 @@ fun ImagePreviewScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // SUMMARY CARD
+            // ⭐ Detection List UI
+            Card(
+                Modifier
+                    .padding(horizontal = 20.dp)
+                    .fillMaxWidth()
+            ) {
+                Column(Modifier.padding(20.dp)) {
+                    Text("Detected Frogs", fontWeight = FontWeight.Bold)
+
+                    if (detections.isEmpty()) {
+                        Text("No frogs detected.")
+                    } else {
+                        detections.forEachIndexed { index, d ->
+                            Spacer(Modifier.height(10.dp))
+                            Text("• #${index + 1} — ${d.label} (${(d.score * 100).toInt()}%)")
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // Summary
             Card(
                 modifier = Modifier
                     .padding(20.dp)
@@ -226,7 +290,7 @@ fun ImagePreviewScreen(
                     Text("Detection Summary", fontWeight = FontWeight.Bold)
 
                     Spacer(Modifier.height(12.dp))
-                    Text("Species: $species", style = MaterialTheme.typography.bodyLarge)
+                    Text("Species: $species")
 
                     if (latitude != null && longitude != null) {
                         Spacer(Modifier.height(8.dp))
@@ -237,7 +301,7 @@ fun ImagePreviewScreen(
                     Spacer(Modifier.height(8.dp))
 
                     val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                        .format(Date(System.currentTimeMillis()))
+                        .format(Date())
                     Text("Timestamp: $dateStr")
 
                     Spacer(Modifier.height(8.dp))

@@ -1,3 +1,4 @@
+// File: app/src/main/java/com/example/frogdetection/viewmodel/CapturedHistoryViewModel.kt
 package com.example.frogdetection.viewmodel
 
 import android.app.Application
@@ -20,37 +21,22 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
 
     private val appContext = application.applicationContext
 
-    // -----------------------------
-    // LOCAL DATABASE REPOSITORY
-    // -----------------------------
     private val repository: CapturedFrogRepository =
         CapturedFrogRepository(
             CapturedFrogDatabase.getDatabase(application).capturedFrogDao()
         )
 
-    // -----------------------------
-    // CLOUD REPOSITORY (Supabase REST + Storage)
-    // -----------------------------
     private val cloudRepo = FrogCloudRepository(appContext)
 
-    // -----------------------------
-    // OPEN CAGE API KEY
-    // -----------------------------
     private val openCageApiKey = appContext.getString(R.string.opencage_api_key)
 
-    // -----------------------------
-    // OBSERVABLE LIST OF FROGS
-    // -----------------------------
     val capturedFrogs: StateFlow<List<CapturedFrog>> =
         repository.getAllFrogs()
             .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // ============================================================================
-    // INSERT FROG (LOCAL + CLOUD)
-    // ============================================================================
+    // Insert local + resolve location (same as before)
     fun insert(frog: CapturedFrog, onInserted: (Long) -> Unit = {}) {
         viewModelScope.launch {
-            // 1️⃣ Try to get readable location
             val locationName = withContext(Dispatchers.IO) {
                 getReadableLocationFromOpenCage(
                     context = appContext,
@@ -60,58 +46,65 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
                 )
             }
 
-            val updated = frog.copy(locationName = locationName)
+            val updatedFrog = frog.copy(locationName = locationName)
 
-            // 2️⃣ Insert locally
-            val newId = repository.insert(updated)
+            val newId = repository.insert(updatedFrog)
             onInserted(newId)
+        }
+    }
 
-            // 3️⃣ Upload to Supabase in background
-            launch(Dispatchers.IO) {
-                val ok = cloudRepo.uploadFrog(updated)
-                if (!ok) {
-                    // TODO: Add offline queue later
+    // Delete local + cloud
+    fun deleteFrog(frog: CapturedFrog) {
+        viewModelScope.launch {
+            // Delete local first
+            repository.delete(frog)
+
+            // Delete from cloud only if uploaded
+            if (frog.uploaded) {
+                launch(Dispatchers.IO) {
+                    cloudRepo.deleteFrogFromCloud(frog.id.toLong())
                 }
             }
         }
     }
 
-    // ============================================================================
-    // DELETE FROG (LOCAL + CLOUD)
-    // ============================================================================
-    fun deleteFrog(frog: CapturedFrog) {
-        viewModelScope.launch {
-            // Local first
-            repository.delete(frog)
 
-            // Cloud second
-            launch(Dispatchers.IO) {
-                cloudRepo.deleteFromCloud(frog.id)
-            }
+
+    // Upload a single frog to cloud (called when user presses "Upload to Map")
+    suspend fun uploadFrogToCloud(frog: CapturedFrog): Boolean {
+        val supabaseId = cloudRepo.uploadFrogAndReturnId(frog)
+
+        if (supabaseId != null) {
+            repository.updateUploadStatus(
+                id = frog.id,
+                uploaded = true,
+                remoteId = supabaseId
+            )
+            return true
         }
+
+        return false
     }
 
-    // ============================================================================
-    // UPDATE LOCATION NAME (LOCAL DB ONLY)
-    // ============================================================================
+
+
+    // Update location name locally
     fun updateLocation(id: Int, name: String) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.updateLocation(id, name)
         }
     }
 
-    // ============================================================================
-    // RESOLVE MISSING LOCATIONS (NO CACHE, DIRECT API CALL)
-    // ============================================================================
+    // Fix missing locations
     fun migrateMissingLocations() {
         viewModelScope.launch {
             capturedFrogs.value
                 .filter {
-                    it.locationName.isNullOrBlank()
-                            && it.latitude != null && it.longitude != null
+                    it.locationName.isNullOrBlank() &&
+                            it.latitude != null &&
+                            it.longitude != null
                 }
                 .forEach { frog ->
-
                     val readable = withContext(Dispatchers.IO) {
                         getReadableLocationFromOpenCage(
                             context = appContext,
@@ -128,9 +121,6 @@ class CapturedHistoryViewModel(application: Application) : AndroidViewModel(appl
         }
     }
 
-    // ============================================================================
-    // GET SINGLE FROG BY ID
-    // ============================================================================
     suspend fun getFrogById(id: Int): CapturedFrog? =
         repository.getFrogById(id)
 }
