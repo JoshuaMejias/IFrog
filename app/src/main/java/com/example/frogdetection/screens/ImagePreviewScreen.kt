@@ -1,30 +1,41 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.example.frogdetection.screens
 
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
-import coil.compose.rememberAsyncImagePainter
+import coil.compose.AsyncImage
+import com.example.frogdetection.R
 import com.example.frogdetection.ml.DetectionOverlay
 import com.example.frogdetection.model.CapturedFrog
 import com.example.frogdetection.model.DetectionStore
@@ -32,10 +43,10 @@ import com.example.frogdetection.utils.FrogDetectionResult
 import com.example.frogdetection.utils.ImageUtils
 import com.example.frogdetection.utils.classifyEdibility
 import com.example.frogdetection.viewmodel.CapturedHistoryViewModel
+import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.google.gson.Gson
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -49,6 +60,7 @@ fun ImagePreviewScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var detections by remember { mutableStateOf<List<FrogDetectionResult>>(emptyList()) }
@@ -56,24 +68,32 @@ fun ImagePreviewScreen(
     var detectDone by remember { mutableStateOf(false) }
     var locationName by remember { mutableStateOf<String?>(null) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+    var isSaving by remember { mutableStateOf(false) }
 
-    // ------------------------------------------------------------
+    // Playful hop animation
+    val infiniteTransition = rememberInfiniteTransition()
+    val hopScale by infiniteTransition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.065f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        )
+    )
+
     // Load & rotate image
-    // ------------------------------------------------------------
     LaunchedEffect(imageUri) {
-        detectDone = false
         bitmap = withContext(Dispatchers.IO) {
-            try { ImageUtils.loadCorrectedBitmap(context, imageUri) }
-            catch (e: Exception) {
+            try {
+                ImageUtils.loadCorrectedBitmap(context, imageUri)
+            } catch (e: Exception) {
                 errorMsg = "Unable to load image: ${e.message}"
                 null
             }
         }
     }
 
-    // ------------------------------------------------------------
-    // Run detector
-    // ------------------------------------------------------------
+    // Detect frogs
     LaunchedEffect(bitmap) {
         val bmp = bitmap ?: return@LaunchedEffect
         detectDone = false
@@ -85,18 +105,15 @@ fun ImagePreviewScreen(
 
                 detections = results
                 species = results.firstOrNull()?.label ?: "Unknown Species"
-
             } catch (e: Exception) {
                 errorMsg = "Detection failed: ${e.message}"
+            } finally {
+                detectDone = true
             }
-            detectDone = true
         }
     }
 
-    // ------------------------------------------------------------
-    // Reverse geocode
-    // ------------------------------------------------------------
-    // Reverse geocode (OpenCage → Nominatim fallback)
+    // Reverse geocoding
     LaunchedEffect(latitude, longitude) {
         val lat = latitude ?: return@LaunchedEffect
         val lon = longitude ?: return@LaunchedEffect
@@ -104,211 +121,276 @@ fun ImagePreviewScreen(
         if (lat == 0.0 && lon == 0.0) return@LaunchedEffect
 
         scope.launch(Dispatchers.IO) {
-            val readable = com.example.frogdetection.utils.getReadableLocationFromOpenCage(
-                context = context,
-                latitude = lat,
-                longitude = lon,
-                apiKey = context.getString(com.example.frogdetection.R.string.opencage_api_key)
-            )
-            locationName = readable
+            try {
+                val readable = com.example.frogdetection.utils.getReadableLocationFromOpenCage(
+                    context = context,
+                    latitude = lat,
+                    longitude = lon,
+                    apiKey = context.getString(R.string.opencage_api_key)
+                )
+                locationName = readable
+            } catch (e: Exception) {
+                locationName = null
+            }
         }
     }
 
-
-    val scroll = rememberScrollState()
+    // Snackbar for errors
+    LaunchedEffect(errorMsg) {
+        errorMsg?.let {
+            snackbarHostState.showSnackbar(it)
+            errorMsg = null
+        }
+    }
 
     Scaffold(
-        bottomBar = {
-            if (detectDone) {
-                BottomAppBar(containerColor = MaterialTheme.colorScheme.surface) {
-
-                    Spacer(Modifier.weight(1f))
-
-                    TextButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.Delete, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Cancel")
-                    }
-
-                    Spacer(Modifier.width(12.dp))
-
-                    Button(
-                        onClick = {
-                            val gson = Gson()
-
-                            // Convert detection list → JSON
-                            val detectionStoreList = detections.map {
-                                DetectionStore(
-                                    species = it.label,
-                                    score = it.score,
-                                    left = it.box.left,
-                                    top = it.box.top,
-                                    right = it.box.right,
-                                    bottom = it.box.bottom
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            painter = painterResource(id = R.drawable.ifrog_logo),
+                            contentDescription = "iFrog",
+                            modifier = Modifier
+                                .size(48.dp)
+                                .scale(hopScale)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("Preview & Detection", style = MaterialTheme.typography.titleLarge)
+                            AnimatedContent(targetState = species) { s ->
+                                Text(
+                                    s,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
                                 )
                             }
+                        }
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = { navController.popBackStack() }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { navController.popBackStack() }) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Cancel",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        },
+        floatingActionButton = {
+            AnimatedVisibility(visible = detectDone) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        isSaving = true
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val gson = Gson()
 
-                            val detectionsJson = gson.toJson(detectionStoreList)
+                                val detectionStoreList = detections.map {
+                                    DetectionStore(
+                                        species = it.label,
+                                        score = it.score,
+                                        left = it.box.left,
+                                        top = it.box.top,
+                                        right = it.box.right,
+                                        bottom = it.box.bottom
+                                    )
+                                }
 
-                            val top = detectionStoreList.maxByOrNull { it.score }
+                                val detectionsJson = gson.toJson(detectionStoreList)
+                                val top = detectionStoreList.maxByOrNull { it.score }
 
-                            val frog = CapturedFrog(
-                                imageUri = imageUri.toString(),
-                                latitude = latitude ?: 0.0,
-                                longitude = longitude ?: 0.0,
-                                speciesName = top?.species ?: "Unknown",
-                                score = top?.score ?: 0f,
-                                detectionsJson = detectionsJson,
-                                timestamp = System.currentTimeMillis(),
-                                locationName = locationName
-                            )
+                                val frog = CapturedFrog(
+                                    imageUri = imageUri.toString(),
+                                    latitude = latitude ?: 0.0,
+                                    longitude = longitude ?: 0.0,
+                                    speciesName = top?.species ?: "Unknown",
+                                    score = top?.score ?: 0f,
+                                    detectionsJson = detectionsJson,
+                                    timestamp = System.currentTimeMillis(),
+                                    locationName = locationName
+                                )
 
-                            viewModel.insert(frog) { newId ->
-                                navController.navigate("resultScreen/$newId")
+                                viewModel.insert(frog) { newId ->
+                                    scope.launch {
+                                        isSaving = false
+                                        navController.navigate("resultScreen/$newId") {
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                isSaving = false
+                                snackbarHostState.showSnackbar("Save failed: ${e.message}")
                             }
                         }
-                    ) {
-                        Icon(Icons.Default.Check, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Save")
-                    }
-
-                    Spacer(Modifier.weight(1f))
-                }
+                    },
+                    icon = { Icon(Icons.Default.Check, contentDescription = "Save") },
+                    text = { Text(if (isSaving) "Saving…" else "Save") },
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
             }
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
+
+        val scroll = rememberScrollState()
 
         Column(
             modifier = Modifier
                 .padding(padding)
                 .verticalScroll(scroll)
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
+                .padding(16.dp)
         ) {
 
-            // Header
-            Box(
-                Modifier
+            // Image preview card
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
                     .fillMaxWidth()
-                    .height(110.dp)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.primary,
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                            )
-                        )
-                    ),
-                contentAlignment = Alignment.BottomStart
+                    .heightIn(min = 200.dp, max = 400.dp),
+                elevation = CardDefaults.cardElevation(8.dp)
             ) {
-                Text(
-                    "Preview & Detection",
-                    modifier = Modifier.padding(20.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    style = MaterialTheme.typography.headlineSmall
-                )
+                Box(Modifier.fillMaxSize()) {
+                    val bmp = bitmap
+                    if (bmp != null) {
+                        Image(
+                            bitmap = bmp.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        DetectionOverlay(
+                            bitmap = bmp,
+                            detections = detections,
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        val edibility = classifyEdibility(species)
+
+                        SuggestionChip(
+                            onClick = {},
+                            label = { Text("${edibility.emoji} ${edibility.label}") },
+                            colors = SuggestionChipDefaults.suggestionChipColors(
+                                containerColor = edibility.color
+                            ),
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .align(Alignment.TopStart)
+                        )
+
+                    } else {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            MaterialTheme.colorScheme.surfaceVariant,
+                                            MaterialTheme.colorScheme.surface
+                                        )
+                                    )
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator()
+                                Spacer(Modifier.height(8.dp))
+                                Text("Loading image…")
+                            }
+                        }
+                    }
+                }
             }
 
             Spacer(Modifier.height(16.dp))
 
-            // ⭐ Edibility Badge
-            val edibility = classifyEdibility(species)
+            // Detection summary
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(4.dp)
+            ) {
+                Column(Modifier.padding(16.dp)) {
 
-            SuggestionChip(
-                onClick = {},
-                label = {
-                    Text(
-                        "${edibility.emoji} ${edibility.label}",
-                        color = Color.White
-                    )
-                },
-                colors = SuggestionChipDefaults.suggestionChipColors(
-                    containerColor = edibility.color
-                ),
-                modifier = Modifier
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 10.dp)
-            )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Detection Summary", fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.weight(1f))
 
-            // Image + Boxes
-            val bmp = bitmap
-            if (bmp != null) {
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 20.dp)
-                        .height(400.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                ) {
-                    Image(
-                        bitmap = bmp.asImageBitmap(),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                        if (!detectDone) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("${detections.size} detected")
+                        }
+                    }
 
-                    DetectionOverlay(
-                        bitmap = bmp,
-                        detections = detections,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    Spacer(Modifier.height(12.dp))
+
+                    val top = detections.maxByOrNull { it.score }
+                    Text("Top species: ${top?.label ?: species}")
+                    top?.let { Text("Confidence: ${(it.score * 100).toInt()}%") }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Row {
+                        Icon(
+                            Icons.Default.Place,
+                            contentDescription = null,
+                            tint = Color(0xFF2196F3)  // Material Blue
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Column {
+                            Text(locationName ?: "Resolving location…")
+                            if (latitude != null && longitude != null) {
+                                Text("Lat: %.5f, Lon: %.5f".format(latitude, longitude))
+                            }
+                        }
+                    }
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(16.dp))
 
-            // ⭐ Detection List UI
+            // Detection list
             Card(
-                Modifier
-                    .padding(horizontal = 20.dp)
-                    .fillMaxWidth()
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(Modifier.padding(20.dp)) {
+                Column(Modifier.padding(12.dp)) {
                     Text("Detected Frogs", fontWeight = FontWeight.Bold)
 
-                    if (detections.isEmpty()) {
+                    if (!detectDone) {
+                        Text("Detecting…")
+                    } else if (detections.isEmpty()) {
                         Text("No frogs detected.")
                     } else {
                         detections.forEachIndexed { index, d ->
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(8.dp))
                             Text("• #${index + 1} — ${d.label} (${(d.score * 100).toInt()}%)")
                         }
                     }
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
-
-            // Summary
-            Card(
-                modifier = Modifier
-                    .padding(20.dp)
-                    .fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(4.dp)
-            ) {
-                Column(Modifier.padding(20.dp)) {
-                    Text("Detection Summary", fontWeight = FontWeight.Bold)
-
-                    Spacer(Modifier.height(12.dp))
-                    Text("Species: $species")
-
-                    if (latitude != null && longitude != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("Latitude: %.5f".format(latitude))
-                        Text("Longitude: %.5f".format(longitude))
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                        .format(Date())
-                    Text("Timestamp: $dateStr")
-
-                    Spacer(Modifier.height(8.dp))
-
-                    Text("Location: ${locationName ?: "Resolving…"}")
-                }
-            }
+            Spacer(Modifier.height(80.dp))
         }
     }
+
+    BackHandler { navController.popBackStack() }
 }
